@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>霓虹吞噬蛇 · Neon Devourer</title>
+<style>
+  :root{
+    --neon:#39f0c8; --neon2:#7c5cff; --pink:#ff4d9d; --bg:#05060f;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);}
+  body{
+    font-family:"Segoe UI",system-ui,-apple-system,sans-serif;
+    color:#e8ecff;user-select:none;-webkit-user-select:none;
+    touch-action:none;cursor:crosshair;
+  }
+  #stage{position:fixed;inset:0;display:block;}
+
+  /* ---------- HUD ---------- */
+  .hud{position:fixed;inset:0;pointer-events:none;z-index:5;}
+  .panel{
+    position:absolute;background:rgba(10,14,30,.55);
+    border:1px solid rgba(120,150,255,.18);border-radius:14px;
+    backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+    box-shadow:0 8px 30px rgba(0,0,0,.45);
+  }
+  /* score top-left */
+  #stats{top:14px;left:14px;padding:12px 16px;min-width:188px;}
+  #stats .row{display:flex;justify-content:space-between;align-items:baseline;gap:18px;margin:3px 0;}
+  #stats .lab{font-size:12px;letter-spacing:1px;color:#8da2d8;text-transform:uppercase;}
+  #stats .val{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;
+    color:var(--neon);text-shadow:0 0 12px rgba(57,240,200,.6);}
+  #stats .val.len{color:var(--pink);text-shadow:0 0 12px rgba(255,77,157,.6);}
+
+  /* leaderboard top-right */
+  #board{top:14px;right:14px;padding:12px 14px;width:208px;}
+  #board h3{font-size:11px;letter-spacing:2px;color:#8da2d8;margin-bottom:8px;text-transform:uppercase;
+    display:flex;align-items:center;gap:6px;}
+  #board ol{list-style:none;}
+  #board li{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;
+    color:#c7d2ff;font-variant-numeric:tabular-nums;}
+  #board li.me{color:var(--neon);font-weight:700;}
+  #board li .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px;}
+  #board li .rk{color:#6b7bb0;width:18px;}
+
+  /* minimap bottom-right */
+  #mini{position:fixed;right:14px;bottom:14px;z-index:5;border-radius:50%;
+    border:1px solid rgba(120,150,255,.22);background:rgba(8,11,24,.55);
+    box-shadow:0 8px 30px rgba(0,0,0,.5);backdrop-filter:blur(4px);}
+
+  /* boost bar bottom-center */
+  #boostWrap{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);
+    width:240px;z-index:5;pointer-events:none;text-align:center;}
+  #boostBar{height:8px;border-radius:6px;background:rgba(120,150,255,.15);overflow:hidden;
+    border:1px solid rgba(120,150,255,.2);}
+  #boostFill{height:100%;width:100%;border-radius:6px;
+    background:linear-gradient(90deg,var(--neon),var(--neon2));
+    box-shadow:0 0 14px rgba(57,240,200,.6);transition:width .08s linear;}
+  #boostWrap .tip{font-size:11px;color:#7f8fc4;margin-top:6px;letter-spacing:1px;}
+
+  /* ---------- Overlay menus ---------- */
+  #overlay{position:fixed;inset:0;z-index:20;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:18px;text-align:center;
+    background:radial-gradient(circle at 50% 35%,rgba(20,16,48,.78),rgba(5,6,15,.94));
+    backdrop-filter:blur(3px);cursor:default;}
+  #overlay.hidden{display:none;}
+  .title{font-size:clamp(34px,7vw,68px);font-weight:800;letter-spacing:3px;line-height:1.05;
+    background:linear-gradient(90deg,var(--neon),var(--neon2) 55%,var(--pink));
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+    filter:drop-shadow(0 0 24px rgba(124,92,255,.45));}
+  .sub{font-size:14px;color:#9fb0e0;letter-spacing:2px;}
+  .card{padding:26px 30px;max-width:440px;}
+  #nameInput{
+    margin-top:4px;width:240px;padding:11px 14px;border-radius:10px;text-align:center;
+    border:1px solid rgba(120,150,255,.3);background:rgba(10,14,30,.7);color:#eaf;
+    font-size:15px;outline:none;letter-spacing:1px;
+  }
+  #nameInput:focus{border-color:var(--neon);box-shadow:0 0 0 3px rgba(57,240,200,.18);}
+  .skins{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:4px;}
+  .skin{width:40px;height:40px;border-radius:50%;cursor:pointer;border:2px solid transparent;
+    transition:transform .12s,border-color .12s;}
+  .skin:hover{transform:scale(1.12);}
+  .skin.sel{border-color:#fff;transform:scale(1.12);box-shadow:0 0 16px rgba(255,255,255,.4);}
+  .btn{pointer-events:auto;cursor:pointer;border:none;border-radius:12px;font-weight:700;
+    padding:14px 40px;font-size:17px;letter-spacing:1px;color:#04101a;
+    background:linear-gradient(90deg,var(--neon),var(--neon2));
+    box-shadow:0 8px 28px rgba(57,240,200,.35);transition:transform .1s,box-shadow .2s;}
+  .btn:hover{transform:translateY(-2px);box-shadow:0 12px 34px rgba(124,92,255,.5);}
+  .btn:active{transform:translateY(0);}
+  .help{font-size:13px;color:#8a9bd0;line-height:1.9;margin-top:6px;}
+  .help b{color:var(--neon);font-weight:700;}
+  .deathStat{display:flex;gap:34px;justify-content:center;margin:6px 0;}
+  .deathStat div{font-size:13px;color:#9fb0e0;}
+  .deathStat b{display:block;font-size:30px;color:var(--neon);
+    text-shadow:0 0 14px rgba(57,240,200,.5);font-variant-numeric:tabular-nums;}
+  .fps{position:fixed;left:14px;bottom:14px;font-size:11px;color:#46527e;z-index:5;font-variant-numeric:tabular-nums;}
+  @media (max-width:560px){
+    #board{display:none;}
+    #stats{min-width:150px;padding:9px 12px;}
+    #mini{display:none;}
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+
+<!-- HUD -->
+<div class="hud">
+  <div id="stats" class="panel">
+    <div class="row"><span class="lab">分数</span><span class="val" id="scoreV">0</span></div>
+    <div class="row"><span class="lab">长度</span><span class="val len" id="lenV">10</span></div>
+    <div class="row"><span class="lab">排名</span><span class="val" id="rankV">#1</span></div>
+  </div>
+  <div id="board" class="panel">
+    <h3>⚡ 排行榜</h3>
+    <ol id="boardList"></ol>
+  </div>
+</div>
+<canvas id="mini" width="150" height="150"></canvas>
+<div id="boostWrap">
+  <div id="boostBar"><div id="boostFill"></div></div>
+  <div class="tip">按住 鼠标 / 空格 加速冲刺</div>
+</div>
+<div class="fps" id="fps"></div>
+
+<!-- Menu / Death overlay -->
+<div id="overlay">
+  <div class="card panel" id="card">
+    <div class="title">霓虹吞噬蛇</div>
+    <div class="sub" id="subTitle">NEON&nbsp;·&nbsp;DEVOURER</div>
+    <input id="nameInput" maxlength="12" placeholder="给你的蛇起个名字" />
+    <div class="skins" id="skins"></div>
+    <button class="btn" id="playBtn">开 始 吞 噬</button>
+    <div class="help">
+      <b>移动</b> 跟随鼠标 / 手指 &nbsp;·&nbsp; <b>冲刺</b> 按住左键 / 空格<br>
+      吞光球变长变粗，撞击其他蛇头让它爆成光点再吃掉它
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ===========================================================
+   霓虹吞噬蛇 — 原创单文件小游戏
+   连续移动 / 鼠标控制 / 吞噬成长 / AI 对手 / 霓虹粒子
+   =========================================================== */
+
+// ---------- canvas & DPR ----------
+const cv = document.getElementById('stage');
+const ctx = cv.getContext('2d');
+const mini = document.getElementById('mini');
+const mctx = mini.getContext('2d');
+let DPR = Math.min(window.devicePixelRatio || 1, 2);
+let VW = 0, VH = 0;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  VW = window.innerWidth; VH = window.innerHeight;
+  cv.width = VW * DPR; cv.height = VH * DPR;
+  cv.style.width = VW + 'px'; cv.style.height = VH + 'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ---------- world ----------
+const WORLD_R = 2600;            // 圆形竞技场半径
+const SEG_SPACING = 4.2;         // 身体采样点间距
+const BASE_SPEED = 2.45;
+const BOOST_SPEED = 4.7;
+const TURN_RATE = 0.115;         // 玩家最大转向（弧度/帧）
+const ORB_TARGET = 520;          // 场上光球目标数量
+const BOT_TARGET = 9;            // AI 数量
+
+const SKINS = [
+  ['#39f0c8','#1f8f7e'], ['#7c5cff','#3a2a8f'], ['#ff4d9d','#a3206b'],
+  ['#ffd24d','#c98a14'], ['#4dafff','#1f5fb0'], ['#8aff5c','#3f9e2c'],
+];
+const BOT_NAMES = ['蚀光','虚空','霓裂','猎食者','流星','黯','幽蛇','炽','棱镜','深渊','银河','残响','噬','暮','离子'];
+
+// ---------- helpers ----------
+const TAU = Math.PI*2;
+const rand=(a,b)=>a+Math.random()*(b-a);
+const randInt=(a,b)=>Math.floor(rand(a,b+1));
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const lerp=(a,b,t)=>a+(b-a)*t;
+function angTo(a,b){ // 把 a 朝 b 旋转最短方向，返回差值 [-PI,PI]
+  let d=(b-a)%TAU; if(d>Math.PI)d-=TAU; if(d<-Math.PI)d+=TAU; return d;
+}
+function hexRGBA(hex,a){
+  const n=parseInt(hex.slice(1),16);
+  return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+}
+
+// length(score) -> radius of snake body
+function radiusFor(len){ return 7 + Math.min(26, Math.pow(len,0.46)*1.05); }
+// number of segment points to render for a given length
+function segCountFor(len){ return Math.floor(8 + len*0.85); }
+
+// ===========================================================
+//  Snake
+// ===========================================================
+class Snake{
+  constructor(opts){
+    this.name = opts.name;
+    this.isPlayer = !!opts.isPlayer;
+    this.skin = opts.skin;
+    this.color = this.skin[0];
+    this.dark = this.skin[1];
+    this.x = opts.x; this.y = opts.y;
+    this.angle = rand(0,TAU);
+    this.len = opts.len || 10;
+    this.speed = BASE_SPEED;
+    this.boosting = false;
+    this.dead = false;
+    this.pts = [];               // 身体采样点 (头在 [0])
+    const c=Math.cos(this.angle), s=Math.sin(this.angle);
+    for(let i=0;i<segCountFor(this.len);i++)
+      this.pts.push({x:this.x - c*i*SEG_SPACING, y:this.y - s*i*SEG_SPACING});
+    this._acc=0;
+    // AI state
+    this.aiTurn = 0;
+    this.aiTimer = rand(20,80);
+    this.aiTarget = null;
+    this.boostFuel = 1;          // 0..1 用于玩家冲刺耗能
+  }
+  get radius(){ return radiusFor(this.len); }
+  get head(){ return this.pts[0]; }
+  get score(){ return Math.floor(this.len*10 - 100); }
+
+  setAngleToward(targetAngle, maxTurn){
+    const d = angTo(this.angle, targetAngle);
+    this.angle += clamp(d, -maxTurn, maxTurn);
+  }
+
+  update(){
+    if(this.dead) return;
+    // speed
+    let sp = this.boosting ? BOOST_SPEED : BASE_SPEED;
+    this.speed = sp;
+    // move head
+    this.x += Math.cos(this.angle)*sp;
+    this.y += Math.sin(this.angle)*sp;
+
+    // sample body points at fixed spacing
+    this._acc += sp;
+    while(this._acc >= SEG_SPACING){
+      this._acc -= SEG_SPACING;
+      this.pts.unshift({x:this.x, y:this.y});
+      const want = segCountFor(this.len);
+      while(this.pts.length > want) this.pts.pop();
+    }
+    // keep head fresh
+    this.pts[0] = {x:this.x, y:this.y};
+  }
+
+  // 撞墙 (圆形边界)
+  outOfBounds(){
+    return Math.hypot(this.x,this.y) > WORLD_R - this.radius*0.4;
+  }
+}
+
+// ===========================================================
+//  Game state
+// ===========================================================
+let snakes = [];
+let orbs = [];
+let particles = [];
+let player = null;
+let running = false;
+let camX=0, camY=0, camScale=1;
+let pointer = {x:0,y:0,active:false};
+let boostHeld = false;
+let kills = 0;
+let frame = 0;
+
+// orb: {x,y,r,color,val,glow, vx,vy(optional drift)}
+function spawnOrb(x,y,val,color){
+  const r = val>=6 ? rand(9,12) : rand(3.4,5.4);
+  orbs.push({x,y,r,val,color:color||randOrbColor(),pulse:rand(0,TAU)});
+}
+function randOrbColor(){
+  const cs=['#39f0c8','#7c5cff','#ff4d9d','#ffd24d','#4dafff','#8aff5c','#ff8a3d'];
+  return cs[randInt(0,cs.length-1)];
+}
+function randWorldPoint(margin){
+  const a=rand(0,TAU), r=Math.sqrt(Math.random())*(WORLD_R-(margin||30));
+  return {x:Math.cos(a)*r, y:Math.sin(a)*r};
+}
+function fillOrbs(){
+  while(orbs.length < ORB_TARGET){
+    const p=randWorldPoint(40);
+    spawnOrb(p.x,p.y,1);
+  }
+}
+
+function spawnBot(){
+  const p=randWorldPoint(200);
+  const skin=SKINS[randInt(0,SKINS.length-1)];
+  const s=new Snake({name:BOT_NAMES[randInt(0,BOT_NAMES.length-1)],
+    x:p.x,y:p.y,skin,len:rand(10,40)});
+  snakes.push(s);
+  return s;
+}
+
+// ---------- particles ----------
+function burst(x,y,color,n,spd){
+  for(let i=0;i<n;i++){
+    const a=rand(0,TAU), v=rand(0.4,1)*(spd||3);
+    particles.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,
+      life:1,decay:rand(0.02,0.05),r:rand(1.5,3.5),color});
+  }
+}
+
+// ===========================================================
+//  Start / restart
+// ===========================================================
+const overlay=document.getElementById('overlay');
+const nameInput=document.getElementById('nameInput');
+const skinsEl=document.getElementById('skins');
+let chosenSkin=0;
+
+SKINS.forEach((sk,i)=>{
+  const d=document.createElement('div');
+  d.className='skin'+(i===0?' sel':'');
+  d.style.background=`radial-gradient(circle at 35% 30%,${sk[0]},${sk[1]})`;
+  d.style.boxShadow=`0 0 14px ${hexRGBA(sk[0],.6)}`;
+  d.onclick=()=>{chosenSkin=i;[...skinsEl.children].forEach(c=>c.classList.remove('sel'));d.classList.add('sel');};
+  skinsEl.appendChild(d);
+});
+
+function startGame(){
+  snakes=[]; orbs=[]; particles=[]; kills=0; frame=0;
+  const p=randWorldPoint(300);
+  player=new Snake({name:(nameInput.value.trim()||'玩家'),isPlayer:true,
+    x:p.x,y:p.y,skin:SKINS[chosenSkin],len:10});
+  snakes.push(player);
+  for(let i=0;i<BOT_TARGET;i++) spawnBot();
+  fillOrbs();
+  camX=player.x; camY=player.y;
+  running=true;
+  overlay.classList.add('hidden');
+}
+
+document.getElementById('playBtn').onclick=startGame;
+nameInput.addEventListener('keydown',e=>{if(e.key==='Enter')startGame();});
+
+function gameOver(){
+  running=false;
+  // player body already scattered + burst in killSnake(); add a final flourish
+  burst(player.x,player.y,player.color,40,6);
+  const card=document.getElementById('card');
+  card.innerHTML=`
+    <div class="title" style="font-size:clamp(30px,6vw,56px)">已被吞噬</div>
+    <div class="deathStat">
+      <div>最终分数<b>${player.score}</b></div>
+      <div>最大长度<b>${Math.floor(player.len)}</b></div>
+      <div>击杀<b>${kills}</b></div>
+    </div>
+    <button class="btn" id="againBtn">再 来 一 局</button>
+    <div class="help">提示：长大后用<b>冲刺</b>绕到对手前方，逼它撞上你的身体</div>`;
+  document.getElementById('againBtn').onclick=()=>{
+    overlay.classList.remove('hidden');
+    // rebuild start card
+    location.reload(); // simplest clean reset; keeps name/skin via inputs? -> we re-show menu
+  };
+  setTimeout(()=>overlay.classList.remove('hidden'),650);
+}
+
+// turn a dead snake's body into orbs
+function scatterSnake(s){
+  const step=Math.max(1,Math.floor(s.pts.length/Math.min(s.pts.length,Math.floor(s.len*0.7))));
+  for(let i=0;i<s.pts.length;i+=step){
+    const p=s.pts[i];
+    spawnOrb(p.x+rand(-6,6),p.y+rand(-6,6),5,s.color);
+  }
+}
+
+// ===========================================================
+//  Input
+// ===========================================================
+function setPointer(e){
+  const t=e.touches?e.touches[0]:e;
+  pointer.x=t.clientX; pointer.y=t.clientY; pointer.active=true;
+}
+cv.addEventListener('mousemove',setPointer);
+cv.addEventListener('mousedown',e=>{if(e.button===0){boostHeld=true;setPointer(e);}});
+window.addEventListener('mouseup',()=>boostHeld=false);
+cv.addEventListener('touchstart',e=>{boostHeld=true;setPointer(e);e.preventDefault();},{passive:false});
+cv.addEventListener('touchmove',e=>{setPointer(e);e.preventDefault();},{passive:false});
+window.addEventListener('touchend',()=>boostHeld=false);
+window.addEventListener('keydown',e=>{
+  if(e.code==='Space'){e.preventDefault();boostHeld=true;}
+});
+window.addEventListener('keyup',e=>{if(e.code==='Space')boostHeld=false;});
+
+// ===========================================================
+//  AI
+// ===========================================================
+function updateBotAI(s){
+  s.aiTimer--;
+  // 找最近光球团 / 躲避边界与他蛇头
+  const toCenter=Math.hypot(s.x,s.y);
+  let desired=s.angle;
+
+  // 边界回避
+  if(toCenter > WORLD_R*0.78){
+    desired=Math.atan2(-s.y,-s.x); // 朝中心
+  } else {
+    // 周期性挑选一个目标光球
+    if(s.aiTimer<=0 || !s.aiTarget){
+      s.aiTimer=rand(30,90);
+      let best=null,bd=1e9;
+      for(let k=0;k<orbs.length;k+=7){ // 抽样，省性能
+        const o=orbs[k]; const d=(o.x-s.x)**2+(o.y-s.y)**2;
+        if(d<bd){bd=d;best=o;}
+      }
+      s.aiTarget=best;
+    }
+    if(s.aiTarget) desired=Math.atan2(s.aiTarget.y-s.y,s.aiTarget.x-s.x);
+  }
+
+  // 躲避其他蛇身体（近距离）
+  for(const o of snakes){
+    if(o===s||o.dead) continue;
+    const hx=o.head.x-s.x, hy=o.head.y-s.y;
+    const dist=Math.hypot(hx,hy);
+    if(dist < 130 && dist>0.1){
+      const away=Math.atan2(s.y-o.y,s.x-o.x);
+      const w=clamp((130-dist)/130,0,1);
+      desired=lerp(desired, away, w*0.8);
+    }
+  }
+
+  s.boosting = false; // bots occasionally boost
+  if(s.len>15 && Math.random()<0.004) s._boostUntil=frame+randInt(20,50);
+  if(s._boostUntil && frame<s._boostUntil && s.len>12){ s.boosting=true; s.len-=0.04; }
+
+  s.setAngleToward(desired, TURN_RATE*0.9);
+}
+
+// ===========================================================
+//  Collisions
+// ===========================================================
+function eatOrbs(s){
+  const r=s.radius + 6;
+  const r2=r*r;
+  for(let i=orbs.length-1;i>=0;i--){
+    const o=orbs[i];
+    const dx=o.x-s.x, dy=o.y-s.y;
+    if(dx*dx+dy*dy < r2){
+      s.len += o.val*0.6;
+      if(s.isPlayer){
+        burst(o.x,o.y,o.color,o.val>=5?10:4,o.val>=5?3:1.8);
+      }
+      orbs.splice(i,1);
+    } else if(dx*dx+dy*dy < (r+90)*(r+90)){
+      // 磁吸：靠近的球被吸过来
+      const d=Math.sqrt(dx*dx+dy*dy)||1;
+      const pull=clamp((180-d)/180,0,1)*2.4;
+      o.x -= (dx/d)*pull; o.y -= (dy/d)*pull;
+    }
+  }
+}
+
+// head-to-body collision: returns the snake we crashed into, or null
+function checkCrash(s){
+  if(s.outOfBounds()) return {wall:true};
+  const hx=s.x, hy=s.y, hr=s.radius;
+  for(const o of snakes){
+    if(o===s||o.dead) continue;
+    const br=o.radius;
+    const hit=(hr+br)*0.86; const hit2=hit*hit;
+    // 跳过靠近头部的几个点（避免与对方头并行时误判过敏），从第2点起
+    for(let i=2;i<o.pts.length;i+=2){
+      const p=o.pts[i];
+      const dx=p.x-hx, dy=p.y-hy;
+      if(dx*dx+dy*dy < hit2) return o;
+    }
+  }
+  return null;
+}
+
+function killSnake(s,by){
+  if(s.dead) return;
+  s.dead=true;
+  scatterSnake(s);
+  burst(s.x,s.y,s.color,40,5);
+  if(by && by.isPlayer) kills++;
+}
+
+// ===========================================================
+//  Main loop
+// ===========================================================
+let last=performance.now(), fps=60, fpsAcc=0, fpsN=0;
+const fpsEl=document.getElementById('fps');
+
+function loop(now){
+  const dt=now-last; last=now;
+  fpsAcc+=dt; fpsN++;
+  if(fpsAcc>500){ fps=Math.round(1000/(fpsAcc/fpsN)); fpsAcc=0;fpsN=0; fpsEl.textContent=fps+' FPS'; }
+
+  if(running) tick();
+  render();
+  requestAnimationFrame(loop);
+}
+
+function tick(){
+  frame++;
+  // ----- player control -----
+  if(player && !player.dead){
+    // pointer -> world angle
+    const worldPX = camX + (pointer.x - VW/2)/camScale;
+    const worldPY = camY + (pointer.y - VH/2)/camScale;
+    const targetAng = Math.atan2(worldPY-player.y, worldPX-player.x);
+    player.setAngleToward(targetAng, TURN_RATE);
+
+    // boost (costs length + fuel)
+    const canBoost = boostHeld && player.len>12 && player.boostFuel>0.04;
+    player.boosting = canBoost;
+    if(canBoost){
+      player.len -= 0.06;
+      player.boostFuel = clamp(player.boostFuel - 0.012, 0, 1);
+      // drop a small orb trail
+      if(frame%4===0){
+        const tx=player.x-Math.cos(player.angle)*player.radius;
+        const ty=player.y-Math.sin(player.angle)*player.radius;
+        spawnOrb(tx,ty,1,player.color);
+        burst(tx,ty,player.color,2,1.4);
+      }
+    } else {
+      player.boostFuel = clamp(player.boostFuel + 0.005, 0, 1);
+    }
+  }
+
+  // ----- AI -----
+  for(const s of snakes){ if(s!==player && !s.dead) updateBotAI(s); }
+
+  // ----- move -----
+  for(const s of snakes){ if(!s.dead) s.update(); }
+
+  // ----- eat -----
+  for(const s of snakes){ if(!s.dead) eatOrbs(s); }
+
+  // ----- collisions -----
+  for(const s of snakes){
+    if(s.dead) continue;
+    const c=checkCrash(s);
+    if(c){
+      if(c.wall){ killSnake(s,null); }
+      else { killSnake(s, c); }
+      if(s===player){ /* handled below */ }
+    }
+  }
+
+  // ----- player death -----
+  if(player && player.dead && running){ gameOver(); }
+
+  // ----- cleanup dead bots & respawn -----
+  for(let i=snakes.length-1;i>=0;i--){
+    if(snakes[i].dead && snakes[i]!==player){ snakes.splice(i,1); }
+  }
+  while(snakes.filter(s=>!s.isPlayer).length < BOT_TARGET){ spawnBot(); }
+
+  // ----- orbs upkeep -----
+  if(orbs.length<ORB_TARGET && frame%3===0) fillOrbs();
+  if(orbs.length>ORB_TARGET*1.6){ orbs.splice(0, orbs.length-Math.floor(ORB_TARGET*1.4)); }
+
+  // ----- particles -----
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i];
+    p.x+=p.vx; p.y+=p.vy; p.vx*=0.94; p.vy*=0.94;
+    p.life-=p.decay;
+    if(p.life<=0) particles.splice(i,1);
+  }
+
+  // ----- camera -----
+  if(player){
+    camX=lerp(camX,player.x,0.12);
+    camY=lerp(camY,player.y,0.12);
+    // zoom out a bit as you grow
+    const targetScale=clamp(1.05 - (player.radius-7)*0.012, 0.62, 1.05);
+    camScale=lerp(camScale,targetScale,0.04);
+  }
+
+  updateHUD();
+}
+
+// ===========================================================
+//  HUD
+// ===========================================================
+const scoreV=document.getElementById('scoreV'),
+      lenV=document.getElementById('lenV'),
+      rankV=document.getElementById('rankV'),
+      boardList=document.getElementById('boardList'),
+      boostFill=document.getElementById('boostFill');
+let hudT=0;
+function updateHUD(){
+  if(!player) return;
+  scoreV.textContent=Math.max(0,player.score);
+  lenV.textContent=Math.floor(player.len);
+  boostFill.style.width=(player.boostFuel*100)+'%';
+  // leaderboard (throttled)
+  if(frame%8===0){
+    const ranked=[...snakes].sort((a,b)=>b.len-a.len);
+    const rank=ranked.indexOf(player)+1;
+    rankV.textContent='#'+rank;
+    let html='';
+    ranked.slice(0,6).forEach((s,i)=>{
+      html+=`<li class="${s===player?'me':''}"><span><span class="rk">${i+1}</span>`+
+            `<span class="nm">${s===player?'你 · ':''}${s.name}</span></span>`+
+            `<span>${Math.max(0,s.score)}</span></li>`;
+    });
+    boardList.innerHTML=html;
+  }
+}
+
+// ===========================================================
+//  Rendering
+// ===========================================================
+function render(){
+  // background
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.fillStyle='#05060f';
+  ctx.fillRect(0,0,VW,VH);
+
+  ctx.save();
+  // camera transform
+  ctx.translate(VW/2,VH/2);
+  ctx.scale(camScale,camScale);
+  ctx.translate(-camX,-camY);
+
+  drawGrid();
+  drawArena();
+  drawOrbs();
+  // snakes: draw others first, player on top
+  for(const s of snakes){ if(s!==player && !s.dead) drawSnake(s); }
+  if(player && !player.dead) drawSnake(player);
+  drawParticles();
+
+  ctx.restore();
+
+  drawMinimap();
+}
+
+function drawGrid(){
+  const view=Math.max(VW,VH)/camScale;
+  const g=80;
+  const x0=Math.floor((camX-view)/g)*g, x1=camX+view;
+  const y0=Math.floor((camY-view)/g)*g, y1=camY+view;
+  ctx.lineWidth=1;
+  ctx.strokeStyle='rgba(90,110,200,0.06)';
+  ctx.beginPath();
+  for(let x=x0;x<x1;x+=g){ ctx.moveTo(x,y0); ctx.lineTo(x,y1); }
+  for(let y=y0;y<y1;y+=g){ ctx.moveTo(x0,y); ctx.lineTo(x1,y); }
+  ctx.stroke();
+}
+
+function drawArena(){
+  // glowing boundary ring
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(0,0,WORLD_R,0,TAU);
+  ctx.strokeStyle='rgba(124,92,255,0.55)';
+  ctx.lineWidth=6;
+  ctx.shadowColor='rgba(124,92,255,0.8)';
+  ctx.shadowBlur=30;
+  ctx.stroke();
+  // soft danger gradient just inside
+  const grd=ctx.createRadialGradient(0,0,WORLD_R-160,0,0,WORLD_R);
+  grd.addColorStop(0,'rgba(124,92,255,0)');
+  grd.addColorStop(1,'rgba(255,77,157,0.12)');
+  ctx.fillStyle=grd; ctx.shadowBlur=0;
+  ctx.beginPath(); ctx.arc(0,0,WORLD_R,0,TAU); ctx.fill();
+  ctx.restore();
+}
+
+function drawOrbs(){
+  // cull to view
+  const view=Math.max(VW,VH)/camScale*0.6+60;
+  ctx.save();
+  for(const o of orbs){
+    if(Math.abs(o.x-camX)>view||Math.abs(o.y-camY)>view) continue;
+    o.pulse+=0.06;
+    const pr=o.r*(1+Math.sin(o.pulse)*0.12);
+    ctx.beginPath();
+    ctx.arc(o.x,o.y,pr,0,TAU);
+    ctx.fillStyle=o.color;
+    ctx.shadowColor=o.color;
+    ctx.shadowBlur=o.r>6?20:12;
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawSnake(s){
+  const r=s.radius;
+  const pts=s.pts;
+  if(pts.length<2) return;
+
+  // ---- glow underlay ----
+  ctx.save();
+  ctx.lineCap='round'; ctx.lineJoin='round';
+  ctx.strokeStyle=hexRGBA(s.color,0.9);
+  ctx.shadowColor=s.color;
+  ctx.shadowBlur=s.isPlayer?26:16;
+  ctx.lineWidth=r*2;
+  strokePath(pts);
+
+  // ---- body gradient core ----
+  ctx.shadowBlur=0;
+  ctx.lineWidth=r*2*0.82;
+  ctx.strokeStyle=s.dark;
+  strokePath(pts);
+
+  // ---- bright center highlight ----
+  ctx.lineWidth=r*0.7;
+  ctx.strokeStyle=hexRGBA(s.color,0.85);
+  strokePath(pts);
+
+  // ---- segment scale dots (moving stripes) ----
+  ctx.fillStyle=hexRGBA('#ffffff',0.10);
+  for(let i=0;i<pts.length;i+=3){
+    const p=pts[i];
+    ctx.beginPath(); ctx.arc(p.x,p.y,r*0.3,0,TAU); ctx.fill();
+  }
+  ctx.restore();
+
+  // ---- head ----
+  drawHead(s,r);
+
+  // ---- name ----
+  ctx.save();
+  ctx.font=`${Math.max(11,r*0.9)}px "Segoe UI",sans-serif`;
+  ctx.textAlign='center';
+  ctx.fillStyle=s.isPlayer?'#ffffff':'rgba(220,228,255,0.7)';
+  ctx.shadowColor='rgba(0,0,0,0.6)'; ctx.shadowBlur=4;
+  ctx.fillText(s.name, s.x, s.y - r - 8);
+  ctx.restore();
+}
+
+function strokePath(pts){
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x,pts[0].y);
+  for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x,pts[i].y);
+  ctx.stroke();
+}
+
+function drawHead(s,r){
+  const a=s.angle;
+  ctx.save();
+  ctx.translate(s.x,s.y);
+  ctx.rotate(a);
+  // head glow circle
+  ctx.beginPath(); ctx.arc(0,0,r*1.05,0,TAU);
+  ctx.fillStyle=s.color; ctx.shadowColor=s.color; ctx.shadowBlur=s.isPlayer?24:14;
+  ctx.fill();
+  ctx.shadowBlur=0;
+  // eyes
+  const ex=r*0.45, ey=r*0.55, er=r*0.42;
+  for(const sgn of [-1,1]){
+    ctx.beginPath(); ctx.arc(ex,sgn*ey,er,0,TAU);
+    ctx.fillStyle='#fff'; ctx.fill();
+    // pupil looks toward pointer for player else forward
+    let lookx=er*0.4, looky=0;
+    if(s.isPlayer){
+      const wpx=camX+(pointer.x-VW/2)/camScale, wpy=camY+(pointer.y-VH/2)/camScale;
+      const la=Math.atan2(wpy-s.y,wpx-s.x)-a;
+      lookx=Math.cos(la)*er*0.4; looky=Math.sin(la)*er*0.4;
+    }
+    ctx.beginPath(); ctx.arc(ex+lookx,sgn*ey+looky,er*0.5,0,TAU);
+    ctx.fillStyle='#0a0a18'; ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawParticles(){
+  ctx.save();
+  for(const p of particles){
+    ctx.globalAlpha=clamp(p.life,0,1);
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,TAU);
+    ctx.fillStyle=p.color; ctx.shadowColor=p.color; ctx.shadowBlur=8;
+    ctx.fill();
+  }
+  ctx.globalAlpha=1;
+  ctx.restore();
+}
+
+// ---------- minimap ----------
+function drawMinimap(){
+  const W=mini.width, H=mini.height, cx=W/2, cy=H/2, R=W/2-3;
+  mctx.clearRect(0,0,W,H);
+  // arena disc
+  mctx.beginPath(); mctx.arc(cx,cy,R,0,TAU);
+  mctx.fillStyle='rgba(20,26,54,0.7)'; mctx.fill();
+  mctx.strokeStyle='rgba(124,92,255,0.6)'; mctx.lineWidth=2; mctx.stroke();
+  const sc=R/WORLD_R;
+  // orbs (sparse)
+  mctx.fillStyle='rgba(120,200,255,0.35)';
+  for(let i=0;i<orbs.length;i+=12){
+    const o=orbs[i];
+    mctx.fillRect(cx+o.x*sc-0.5,cy+o.y*sc-0.5,1.2,1.2);
+  }
+  // snakes
+  for(const s of snakes){
+    if(s.dead) continue;
+    mctx.beginPath();
+    mctx.arc(cx+s.x*sc,cy+s.y*sc, s.isPlayer?3:2, 0,TAU);
+    mctx.fillStyle=s.isPlayer?'#39f0c8':hexRGBA(s.color,0.85);
+    mctx.fill();
+  }
+}
+
+// kick off
+requestAnimationFrame(loop);
+nameInput.focus();
+</script>
+</body>
+</html>
