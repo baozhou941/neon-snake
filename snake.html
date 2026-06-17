@@ -143,11 +143,46 @@
   body.touch #boostBtn{display:flex;}
   body.touch #boostTip{display:none;}
   body.touch #boostWrap{bottom:auto;top:auto;left:18px;right:auto;bottom:54px;transform:none;width:120px;}
+  /* 光谱进化 三选一 */
+  #evolve{position:fixed;inset:0;z-index:18;display:none;flex-direction:column;
+    align-items:center;justify-content:center;gap:16px;text-align:center;
+    background:radial-gradient(circle at 50% 40%,rgba(18,14,40,.86),rgba(4,5,13,.94));
+    backdrop-filter:blur(3px);}
+  #evolve.show{display:flex;}
+  #evolve h2{font-size:clamp(24px,5vw,36px);font-weight:800;letter-spacing:3px;
+    background:linear-gradient(90deg,#39f0c8,#7c5cff 55%,#ff4d9d);-webkit-background-clip:text;
+    background-clip:text;color:transparent;filter:drop-shadow(0 0 18px rgba(124,92,255,.5));}
+  #evolve .esub{font-size:13px;color:#9fb0e0;margin-top:-6px;letter-spacing:1px;}
+  #evCards{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;max-width:720px;padding:6px 14px;}
+  .evCard{width:198px;min-height:156px;padding:18px 16px;border-radius:16px;cursor:pointer;
+    background:rgba(12,16,32,.72);border:1.5px solid rgba(120,150,255,.25);
+    display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center;
+    transition:transform .12s,border-color .12s,box-shadow .2s;pointer-events:auto;
+    -webkit-tap-highlight-color:transparent;}
+  .evCard:hover,.evCard:active{transform:translateY(-5px);}
+  .evCard .eicon{font-size:36px;line-height:1;}
+  .evCard .ename{font-size:18px;font-weight:800;}
+  .evCard .edesc{font-size:13px;color:#aebbe6;line-height:1.55;}
+  .evCard.g-red{border-color:rgba(255,90,130,.5);}
+  .evCard.g-red:hover{box-shadow:0 0 26px rgba(255,77,157,.4);}
+  .evCard.g-green{border-color:rgba(110,240,160,.5);}
+  .evCard.g-green:hover{box-shadow:0 0 26px rgba(80,240,150,.4);}
+  .evCard.g-blue{border-color:rgba(90,170,255,.5);}
+  .evCard.g-blue:hover{box-shadow:0 0 26px rgba(77,175,255,.4);}
+  .ename.g-red{color:#ff7da6;} .ename.g-green{color:#7df0a6;} .ename.g-blue{color:#7db8ff;}
+  /* 事件横幅 */
+  #eventBanner{position:fixed;top:38%;left:50%;transform:translate(-50%,-50%) scale(.8);
+    z-index:7;pointer-events:none;font-size:clamp(24px,5.5vw,48px);font-weight:900;
+    letter-spacing:2px;opacity:0;text-align:center;text-shadow:0 0 24px currentColor;
+    transition:opacity .3s,transform .3s;white-space:nowrap;}
+  #eventBanner.show{opacity:1;transform:translate(-50%,-50%) scale(1);}
   @media (max-width:560px){
     #board{display:none;}
     #stats{min-width:128px;padding:8px 11px;}
     #mini{display:none;}
     #comboHud{top:58px;}
+    .evCard{width:150px;min-height:130px;padding:14px 10px;}
+    .evCard .eicon{font-size:30px;} .evCard .ename{font-size:16px;} .evCard .edesc{font-size:12px;}
   }
 </style>
 </head>
@@ -175,6 +210,16 @@
 <button id="boostBtn" aria-label="加速冲刺">⚡<span>加速</span></button>
 <div class="fps" id="fps"></div>
 <button id="soundBtn" title="音效 / 音乐开关">🔊</button>
+
+<!-- 动态事件横幅 -->
+<div id="eventBanner"></div>
+
+<!-- 光谱进化：三选一 -->
+<div id="evolve">
+  <h2>光谱进化</h2>
+  <div class="esub">选择一项变异 · 强化你的吞噬之道</div>
+  <div id="evCards"></div>
+</div>
 
 <!-- Menu / Death overlay -->
 <div id="overlay">
@@ -278,6 +323,8 @@ class Snake{
     this.aiTimer = rand(20,80);
     this.aiTarget = null;
     this.boostFuel = 1;          // 0..1 用于玩家冲刺耗能
+    this.mods = defaultMods();   // 光谱进化修正（仅玩家会改）
+    this.mutLevel = 0;           // 已触发的里程碑数
   }
   get radius(){ return radiusFor(this.len); }
   get head(){ return this.pts[0]; }
@@ -290,8 +337,9 @@ class Snake{
 
   update(){
     if(this.dead) return;
-    // speed
-    let sp = this.boosting ? BOOST_SPEED : BASE_SPEED;
+    // speed (含进化修正)
+    let base = this.boosting ? BOOST_SPEED*this.mods.boostSpeed : BASE_SPEED;
+    let sp = base * this.mods.speed;
     this.speed = sp;
     // move head
     this.x += Math.cos(this.angle)*sp;
@@ -310,9 +358,9 @@ class Snake{
     this.pts[0] = {x:this.x, y:this.y};
   }
 
-  // 撞墙 (圆形边界)
+  // 撞墙 (动态圆形边界)
   outOfBounds(){
-    return Math.hypot(this.x,this.y) > WORLD_R - this.radius*0.4;
+    return Math.hypot(this.x,this.y) > arenaR - this.radius*0.4;
   }
 }
 
@@ -333,6 +381,20 @@ let frame = 0;
 let combo=0, comboTimer=0, bonusScore=0;
 let shake=0, freeze=0;
 let touchSteer=false, touchHeading=0;
+// phase 2: evolution + dynamic events
+let paused=false;
+let arenaR=WORLD_R;
+let ev={phase:'idle', timer:1500, t:0, lastKind:'void'};
+function defaultMods(){
+  return {lenGain:1, magnet:1, turn:1, speed:1, boostSpeed:1, boostCost:1,
+          fuelRegen:1, phase:false, thorns:0, comboBoost:1, comboWindow:1, hit:1};
+}
+// 长度里程碑：达到即触发一次三选一
+const MILESTONES=[30,70,130,210,320,470,660,900,1200,1600,2100,2700];
+function milestoneAt(level){
+  return level<MILESTONES.length ? MILESTONES[level]
+       : MILESTONES[MILESTONES.length-1] + (level-MILESTONES.length+1)*800;
+}
 
 // orb: {x,y,r,color,val,pulse,vx,vy,delay}
 function spawnOrb(x,y,val,color,vx,vy,delay){
@@ -345,7 +407,12 @@ function randOrbColor(){
   return cs[randInt(0,cs.length-1)];
 }
 function randWorldPoint(margin){
-  const a=rand(0,TAU), r=Math.sqrt(Math.random())*(WORLD_R-(margin||30));
+  const a=rand(0,TAU), r=Math.sqrt(Math.random())*(arenaR-(margin||30));
+  return {x:Math.cos(a)*r, y:Math.sin(a)*r};
+}
+// 圆盘内随机点（用于超新星：中心附近）
+function randDisc(maxR){
+  const a=rand(0,TAU), r=Math.sqrt(Math.random())*maxR;
   return {x:Math.cos(a)*r, y:Math.sin(a)*r};
 }
 function fillOrbs(){
@@ -370,6 +437,88 @@ function burst(x,y,color,n,spd){
     const a=rand(0,TAU), v=rand(0.4,1)*(spd||3);
     particles.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,
       life:1,decay:rand(0.02,0.05),r:rand(1.5,3.5),color});
+  }
+}
+
+// ===========================================================
+//  光谱进化（三选一构筑）
+// ===========================================================
+const MUTATIONS=[
+  {id:'gluttony', group:'green',icon:'🟢',name:'贪食',desc:'吞球成长 +25%',          apply:p=>p.mods.lenGain*=1.25},
+  {id:'magnet',   group:'green',icon:'🧲',name:'磁极',desc:'吸球范围 +35%',          apply:p=>p.mods.magnet*=1.35},
+  {id:'amplify',  group:'green',icon:'✴️',name:'增幅',desc:'连击加成↑·持续更久',     apply:p=>{p.mods.comboBoost*=1.4; p.mods.comboWindow*=1.3;}},
+  {id:'agile',    group:'blue', icon:'🌀',name:'灵蛇',desc:'转向更灵活 +18%',         apply:p=>p.mods.turn*=1.18},
+  {id:'swift',    group:'blue', icon:'💨',name:'疾风',desc:'移动速度 +10%',           apply:p=>p.mods.speed*=1.1},
+  {id:'efficient',group:'blue', icon:'🔋',name:'节能',desc:'冲刺更省·回能更快',       apply:p=>{p.mods.boostCost*=0.78; p.mods.fuelRegen*=1.6;}},
+  {id:'steady',   group:'blue', icon:'🛡',name:'稳健',desc:'命中体积 -10%·更难被撞死',apply:p=>p.mods.hit=Math.max(0.55,p.mods.hit*0.9)},
+  {id:'blade',    group:'red',  icon:'⚡',name:'利刃',desc:'冲刺速度 +18%',           apply:p=>p.mods.boostSpeed*=1.18},
+  {id:'thorns',   group:'red',  icon:'🌵',name:'棘刺',desc:'击杀获得额外吞噬奖励',     apply:p=>p.mods.thorns+=1},
+  {id:'phase',    group:'red',  icon:'👻',name:'相位',desc:'冲刺时蛇头可穿身不死',unique:true,apply:p=>p.mods.phase=true},
+];
+let acquired=new Set();
+const evolveEl=document.getElementById('evolve');
+const evCardsEl=document.getElementById('evCards');
+
+function openEvolve(){
+  paused=true;
+  if(player._sfxBoost){ Sound.boostOff(); player._sfxBoost=false; }
+  Sound.levelup();
+  const pool=MUTATIONS.filter(m=>!(m.unique && acquired.has(m.id)));
+  const tmp=pool.slice(), pick=[];
+  while(pick.length<3 && tmp.length) pick.push(tmp.splice(randInt(0,tmp.length-1),1)[0]);
+  evCardsEl.innerHTML='';
+  pick.forEach(m=>{
+    const d=document.createElement('div');
+    d.className='evCard g-'+m.group;
+    d.innerHTML=`<div class="eicon">${m.icon}</div><div class="ename g-${m.group}">${m.name}</div><div class="edesc">${m.desc}</div>`;
+    d.onclick=()=>chooseMutation(m);
+    evCardsEl.appendChild(d);
+  });
+  evolveEl.classList.add('show');
+}
+function chooseMutation(m){
+  m.apply(player); acquired.add(m.id);
+  evolveEl.classList.remove('show');
+  paused=false;
+  banner('进化 · '+m.name, '#39f0c8');
+}
+
+// ===========================================================
+//  动态事件（虚空收缩 / 超新星）
+// ===========================================================
+let bannerTO=null;
+function banner(text,color){
+  const el=document.getElementById('eventBanner');
+  el.textContent=text; el.style.color=color||'#39f0c8';
+  el.classList.add('show');
+  if(bannerTO) clearTimeout(bannerTO);
+  bannerTO=setTimeout(()=>el.classList.remove('show'), 2200);
+}
+function startEvent(kind){
+  if(kind==='nova'){
+    banner('☄ 超新星爆发 · 中心能量喷涌','#ffd24d');
+    for(let i=0;i<90;i++){ const p=randDisc(380); spawnOrb(p.x,p.y, randInt(4,9)); }
+    ev.phase='idle'; ev.timer=2400;
+  } else {
+    banner('⚠ 虚空收缩 · 退向中心！','#ff4d9d');
+    ev.phase='void'; ev.t=0;
+  }
+  ev.lastKind=kind;
+}
+function updateEvents(){
+  if(ev.phase==='idle'){
+    if(--ev.timer<=0) startEvent(ev.lastKind==='nova'?'void':'nova');
+    return;
+  }
+  if(ev.phase==='void'){
+    ev.t++;
+    const dur=960;                     // ~16s
+    const k=ev.t/dur;
+    if(k>=1){ arenaR=WORLD_R; ev.phase='idle'; ev.timer=2200; }
+    else {
+      let f; if(k<0.35) f=k/0.35; else if(k<0.65) f=1; else f=1-(k-0.65)/0.35;
+      arenaR=lerp(WORLD_R, WORLD_R*0.6, f);   // 收缩 → 保持 → 恢复
+    }
   }
 }
 
@@ -457,13 +606,19 @@ const Sound = (function(){
     if(idx%2===1) tone(nf(semi+12),0.12,'sine',0.045,musicGain); // 高音点缀
     step++;
   }
+  function levelup(){
+    if(!actx) return;
+    tone(523,0.13,'triangle',0.20);
+    setTimeout(()=>tone(659,0.13,'triangle',0.20),90);
+    setTimeout(()=>tone(784,0.20,'triangle',0.22),180);
+  }
   function startMusic(){ if(!actx) return; stopMusic(); step=0; musicTimer=setInterval(beat,205); }
   function stopMusic(){ if(musicTimer){clearInterval(musicTimer); musicTimer=null;} }
   function setMuted(m){
     muted=m; localStorage.setItem('neon_snake_muted', m?'1':'0');
     if(master) master.gain.value = m?0:0.85;
   }
-  return {init,eat,kill,die,boostOn,boostOff,startMusic,stopMusic,setMuted,
+  return {init,eat,kill,die,boostOn,boostOff,levelup,startMusic,stopMusic,setMuted,
           get muted(){return muted;}};
 })();
 
@@ -550,6 +705,10 @@ function onPlay(){
 function startGame(){
   snakes=[]; orbs=[]; particles=[]; kills=0; frame=0;
   combo=0; comboTimer=0; bonusScore=0; shake=0; freeze=0;
+  paused=false; arenaR=WORLD_R;
+  ev={phase:'idle', timer:1500, t:0, lastKind:'void'};
+  acquired.clear();
+  document.getElementById('evolve').classList.remove('show');
   const p=randWorldPoint(300);
   player=new Snake({name:(playerName||'玩家'),isPlayer:true,
     x:p.x,y:p.y,skin:SKINS[chosenSkin],len:10});
@@ -668,8 +827,8 @@ function updateBotAI(s){
   const toCenter=Math.hypot(s.x,s.y);
   let desired=s.angle;
 
-  // 边界回避
-  if(toCenter > WORLD_R*0.78){
+  // 边界回避（含虚空收缩时的当前边界）
+  if(toCenter > arenaR*0.78){
     desired=Math.atan2(-s.y,-s.x); // 朝中心
   } else {
     // 周期性挑选一个目标光球
@@ -710,24 +869,28 @@ function updateBotAI(s){
 function eatOrbs(s){
   const r=s.radius + 6;
   const r2=r*r;
+  const mag = s.mods.magnet;
+  const magR = r + 90*mag;
+  const magR2 = magR*magR;
   for(let i=orbs.length-1;i>=0;i--){
     const o=orbs[i];
     if(o.delay>0) continue;                 // 刚迸射的球短暂不可吃，先飞出去
     const dx=o.x-s.x, dy=o.y-s.y;
-    if(dx*dx+dy*dy < r2){
-      s.len += o.val*0.6;
+    const d2=dx*dx+dy*dy;
+    if(d2 < r2){
+      s.len += o.val*0.6*s.mods.lenGain;
       if(s.isPlayer){
         burst(o.x,o.y,o.color,o.val>=5?10:4,o.val>=5?3:1.8);
         Sound.eat();
         // ---- 吞噬连击 ----
-        combo++; comboTimer=70;
-        bonusScore += Math.max(1, Math.round(o.val * Math.min(combo,40) * 0.45));
+        combo++; comboTimer=Math.round(70*s.mods.comboWindow);
+        bonusScore += Math.max(1, Math.round(o.val * Math.min(combo,40) * 0.45 * s.mods.comboBoost));
       }
       orbs.splice(i,1);
-    } else if(dx*dx+dy*dy < (r+90)*(r+90)){
+    } else if(d2 < magR2){
       // 磁吸：靠近的球被吸过来
-      const d=Math.sqrt(dx*dx+dy*dy)||1;
-      const pull=clamp((180-d)/180,0,1)*2.4;
+      const d=Math.sqrt(d2)||1;
+      const pull=clamp((magR*2-d)/(magR*2),0,1)*2.4;
       o.x -= (dx/d)*pull; o.y -= (dy/d)*pull;
     }
   }
@@ -736,7 +899,7 @@ function eatOrbs(s){
 // head-to-body collision: returns the snake we crashed into, or null
 function checkCrash(s){
   if(s.outOfBounds()) return {wall:true};
-  const hx=s.x, hy=s.y, hr=s.radius;
+  const hx=s.x, hy=s.y, hr=s.radius*s.mods.hit;
   for(const o of snakes){
     if(o===s||o.dead) continue;
     const br=o.radius;
@@ -756,7 +919,10 @@ function killSnake(s,by){
   s.dead=true;
   scatterSnake(s);
   burst(s.x,s.y,s.color,40,5);
-  if(by && by.isPlayer){ kills++; Sound.kill(); shake=Math.max(shake,8); freeze=5; }
+  if(by && by.isPlayer){
+    kills++; Sound.kill(); shake=Math.max(shake,8); freeze=5;
+    if(by.mods.thorns>0) by.len += 5*by.mods.thorns;   // 棘刺：击杀额外吞噬奖励
+  }
 }
 
 // ===========================================================
@@ -770,7 +936,7 @@ function loop(now){
   fpsAcc+=dt; fpsN++;
   if(fpsAcc>500){ fps=Math.round(1000/(fpsAcc/fpsN)); fpsAcc=0;fpsN=0; fpsEl.textContent=fps+' FPS'; }
 
-  if(running){ if(freeze>0) freeze--; else tick(); }   // freeze = 击杀顿帧
+  if(running && !paused){ if(freeze>0) freeze--; else tick(); }   // freeze=击杀顿帧, paused=进化选择
   render();
   requestAnimationFrame(loop);
 }
@@ -788,14 +954,14 @@ function tick(){
       const worldPY = camY + (pointer.y - VH/2)/camScale;
       targetAng = Math.atan2(worldPY-player.y, worldPX-player.x);
     }
-    player.setAngleToward(targetAng, TURN_RATE);
+    player.setAngleToward(targetAng, TURN_RATE*player.mods.turn);
 
     // boost (costs length + fuel)
     const canBoost = boostHeld && player.len>12 && player.boostFuel>0.04;
     player.boosting = canBoost;
     if(canBoost){
-      player.len -= 0.06;
-      player.boostFuel = clamp(player.boostFuel - 0.012, 0, 1);
+      player.len -= 0.06*player.mods.boostCost;
+      player.boostFuel = clamp(player.boostFuel - 0.012*player.mods.boostCost, 0, 1);
       // drop a small orb trail
       if(frame%4===0){
         const tx=player.x-Math.cos(player.angle)*player.radius;
@@ -804,7 +970,7 @@ function tick(){
         burst(tx,ty,player.color,2,1.4);
       }
     } else {
-      player.boostFuel = clamp(player.boostFuel + 0.005, 0, 1);
+      player.boostFuel = clamp(player.boostFuel + 0.005*player.mods.fuelRegen, 0, 1);
     }
     // boost whoosh on/off
     if(canBoost && !player._sfxBoost){ Sound.boostOn(); player._sfxBoost=true; }
@@ -826,8 +992,9 @@ function tick(){
     const c=checkCrash(s);
     if(c){
       if(c.wall){ killSnake(s,null); }
+      // 相位：玩家冲刺时蛇头可穿过他蛇身体而不死
+      else if(s===player && player.mods.phase && player.boosting){ /* 穿身而过 */ }
       else { killSnake(s, c); }
-      if(s===player){ /* handled below */ }
     }
   }
 
@@ -856,6 +1023,15 @@ function tick(){
   if(comboTimer>0){ comboTimer--; if(comboTimer===0) combo=0; }
   // ----- shake decay -----
   if(shake>0) shake=Math.max(0, shake-0.6);
+
+  // ----- dynamic events -----
+  updateEvents();
+
+  // ----- 光谱进化里程碑 -----
+  if(player && !player.dead && player.len >= milestoneAt(player.mutLevel)){
+    player.mutLevel++;
+    openEvolve();
+  }
 
   // ----- particles -----
   for(let i=particles.length-1;i>=0;i--){
@@ -989,21 +1165,22 @@ function drawGrid(){
 }
 
 function drawArena(){
-  // glowing boundary ring
+  const contracting = ev.phase==='void';
+  const ringCol = contracting ? 'rgba(255,77,157,0.85)' : 'rgba(124,92,255,0.55)';
   ctx.save();
   ctx.beginPath();
-  ctx.arc(0,0,WORLD_R,0,TAU);
-  ctx.strokeStyle='rgba(124,92,255,0.55)';
-  ctx.lineWidth=6;
-  ctx.shadowColor='rgba(124,92,255,0.8)';
+  ctx.arc(0,0,arenaR,0,TAU);
+  ctx.strokeStyle=ringCol;
+  ctx.lineWidth=contracting?9:6;
+  ctx.shadowColor=contracting?'rgba(255,77,157,0.9)':'rgba(124,92,255,0.8)';
   ctx.shadowBlur=30;
   ctx.stroke();
   // soft danger gradient just inside
-  const grd=ctx.createRadialGradient(0,0,WORLD_R-160,0,0,WORLD_R);
+  const grd=ctx.createRadialGradient(0,0,Math.max(0,arenaR-160),0,0,arenaR);
   grd.addColorStop(0,'rgba(124,92,255,0)');
-  grd.addColorStop(1,'rgba(255,77,157,0.12)');
+  grd.addColorStop(1, contracting?'rgba(255,77,157,0.22)':'rgba(255,77,157,0.12)');
   ctx.fillStyle=grd; ctx.shadowBlur=0;
-  ctx.beginPath(); ctx.arc(0,0,WORLD_R,0,TAU); ctx.fill();
+  ctx.beginPath(); ctx.arc(0,0,arenaR,0,TAU); ctx.fill();
   ctx.restore();
 }
 
@@ -1132,8 +1309,13 @@ function drawMinimap(){
   // arena disc
   mctx.beginPath(); mctx.arc(cx,cy,R,0,TAU);
   mctx.fillStyle='rgba(20,26,54,0.7)'; mctx.fill();
-  mctx.strokeStyle='rgba(124,92,255,0.6)'; mctx.lineWidth=2; mctx.stroke();
+  mctx.strokeStyle='rgba(124,92,255,0.35)'; mctx.lineWidth=2; mctx.stroke();
   const sc=R/WORLD_R;
+  // 当前(可能收缩中的)边界
+  if(arenaR < WORLD_R-1){
+    mctx.beginPath(); mctx.arc(cx,cy,R*arenaR/WORLD_R,0,TAU);
+    mctx.strokeStyle='rgba(255,77,157,0.9)'; mctx.lineWidth=2; mctx.stroke();
+  }
   // orbs (sparse)
   mctx.fillStyle='rgba(120,200,255,0.35)';
   for(let i=0;i<orbs.length;i+=12){
