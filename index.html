@@ -123,10 +123,31 @@
   .linkBtn{pointer-events:auto;cursor:pointer;background:none;border:none;color:#9fb0e0;
     font-size:14px;text-decoration:underline;text-underline-offset:3px;}
   .linkBtn:hover{color:var(--neon);}
+  /* combo readout */
+  #comboHud{position:fixed;top:64px;left:50%;transform:translateX(-50%);z-index:6;
+    pointer-events:none;text-align:center;font-weight:800;letter-spacing:1px;
+    opacity:0;transition:opacity .15s;white-space:nowrap;}
+  #comboHud.on{opacity:1;}
+  #comboHud .cx{font-size:30px;color:#ffd24d;text-shadow:0 0 18px rgba(255,170,60,.8);}
+  #comboHud .cm{font-size:13px;color:#ffe;opacity:.85;}
+  /* touch boost button (hidden on desktop) */
+  #boostBtn{display:none;position:fixed;right:22px;bottom:46px;z-index:6;
+    width:104px;height:104px;border-radius:50%;cursor:pointer;
+    flex-direction:column;align-items:center;justify-content:center;gap:2px;
+    border:2px solid rgba(57,240,200,.5);color:#cffaf0;font-size:30px;line-height:1;
+    background:radial-gradient(circle at 50% 38%,rgba(57,240,200,.34),rgba(10,18,34,.6));
+    box-shadow:0 8px 26px rgba(0,0,0,.45),0 0 22px rgba(57,240,200,.25);
+    -webkit-tap-highlight-color:transparent;touch-action:none;user-select:none;}
+  #boostBtn span{font-size:13px;letter-spacing:2px;font-weight:700;}
+  #boostBtn:active{transform:scale(.94);background:radial-gradient(circle at 50% 38%,rgba(57,240,200,.6),rgba(10,18,34,.7));}
+  body.touch #boostBtn{display:flex;}
+  body.touch #boostTip{display:none;}
+  body.touch #boostWrap{bottom:auto;top:auto;left:18px;right:auto;bottom:54px;transform:none;width:120px;}
   @media (max-width:560px){
     #board{display:none;}
-    #stats{min-width:150px;padding:9px 12px;}
+    #stats{min-width:128px;padding:8px 11px;}
     #mini{display:none;}
+    #comboHud{top:58px;}
   }
 </style>
 </head>
@@ -148,8 +169,10 @@
 <canvas id="mini" width="150" height="150"></canvas>
 <div id="boostWrap">
   <div id="boostBar"><div id="boostFill"></div></div>
-  <div class="tip">按住 鼠标 / 空格 加速冲刺</div>
+  <div class="tip" id="boostTip">按住 鼠标 / 空格 加速冲刺</div>
 </div>
+<div id="comboHud"></div>
+<button id="boostBtn" aria-label="加速冲刺">⚡<span>加速</span></button>
 <div class="fps" id="fps"></div>
 <button id="soundBtn" title="音效 / 音乐开关">🔊</button>
 
@@ -198,8 +221,9 @@ const SEG_SPACING = 4.2;         // 身体采样点间距
 const BASE_SPEED = 2.45;
 const BOOST_SPEED = 4.7;
 const TURN_RATE = 0.115;         // 玩家最大转向（弧度/帧）
-const ORB_TARGET = 520;          // 场上光球目标数量
+const ORB_TARGET = 300;          // 场上光球目标数量（性能权衡）
 const BOT_TARGET = 9;            // AI 数量
+const MAX_SEG = 200;             // 蛇身渲染段数硬上限（防止超长卡顿）
 
 const SKINS = [
   ['#39f0c8','#1f8f7e'], ['#7c5cff','#3a2a8f'], ['#ff4d9d','#a3206b'],
@@ -223,8 +247,10 @@ function hexRGBA(hex,a){
 
 // length(score) -> radius of snake body
 function radiusFor(len){ return 7 + Math.min(26, Math.pow(len,0.46)*1.05); }
-// number of segment points to render for a given length
-function segCountFor(len){ return Math.floor(8 + len*0.85); }
+// 渲染段数：随长度增长但封顶在 MAX_SEG —— 解决"越长越卡"
+function segCountFor(len){ return Math.round(clamp(10 + len*0.55, 10, MAX_SEG)); }
+// 采样间距：体型越大间距越大，让"段数封顶"的蛇依然很长
+function spacingFor(len){ return SEG_SPACING * clamp(1 + (len-120)/1200, 1, 3.2); }
 
 // ===========================================================
 //  Snake
@@ -243,9 +269,9 @@ class Snake{
     this.boosting = false;
     this.dead = false;
     this.pts = [];               // 身体采样点 (头在 [0])
-    const c=Math.cos(this.angle), s=Math.sin(this.angle);
+    const c=Math.cos(this.angle), s=Math.sin(this.angle), sp0=spacingFor(this.len);
     for(let i=0;i<segCountFor(this.len);i++)
-      this.pts.push({x:this.x - c*i*SEG_SPACING, y:this.y - s*i*SEG_SPACING});
+      this.pts.push({x:this.x - c*i*sp0, y:this.y - s*i*sp0});
     this._acc=0;
     // AI state
     this.aiTurn = 0;
@@ -271,10 +297,11 @@ class Snake{
     this.x += Math.cos(this.angle)*sp;
     this.y += Math.sin(this.angle)*sp;
 
-    // sample body points at fixed spacing
+    // sample body points at size-scaled spacing
+    const space = spacingFor(this.len);
     this._acc += sp;
-    while(this._acc >= SEG_SPACING){
-      this._acc -= SEG_SPACING;
+    while(this._acc >= space){
+      this._acc -= space;
       this.pts.unshift({x:this.x, y:this.y});
       const want = segCountFor(this.len);
       while(this.pts.length > want) this.pts.pop();
@@ -302,11 +329,16 @@ let pointer = {x:0,y:0,active:false};
 let boostHeld = false;
 let kills = 0;
 let frame = 0;
+// combo + juice + touch state
+let combo=0, comboTimer=0, bonusScore=0;
+let shake=0, freeze=0;
+let touchSteer=false, touchHeading=0;
 
-// orb: {x,y,r,color,val,glow, vx,vy(optional drift)}
-function spawnOrb(x,y,val,color){
+// orb: {x,y,r,color,val,pulse,vx,vy,delay}
+function spawnOrb(x,y,val,color,vx,vy,delay){
   const r = val>=6 ? rand(9,12) : rand(3.4,5.4);
-  orbs.push({x,y,r,val,color:color||randOrbColor(),pulse:rand(0,TAU)});
+  orbs.push({x,y,r,val,color:color||randOrbColor(),pulse:rand(0,TAU),
+             vx:vx||0,vy:vy||0,delay:delay||0});
 }
 function randOrbColor(){
   const cs=['#39f0c8','#7c5cff','#ff4d9d','#ffd24d','#4dafff','#8aff5c','#ff8a3d'];
@@ -481,8 +513,9 @@ const MENU_HTML=`
   <button class="btn" id="playBtn">开 始 吞 噬</button>
   <div id="hsBox" class="hsBox"></div>
   <div class="help">
-    <b>移动</b> 跟随鼠标 / 手指 &nbsp;·&nbsp; <b>冲刺</b> 按住左键 / 空格<br>
-    吞光球变长变粗，撞击其他蛇头让它爆成光点再吃掉它
+    <b>电脑</b>：鼠标控方向 · 按住左键/空格 冲刺<br>
+    <b>手机</b>：左手滑动摇杆控方向 · 右下「加速」按钮冲刺<br>
+    连续吞球攒<b>连击</b>飙分，撞别人蛇身把它爆成光点再吃掉
   </div>`;
 
 function renderMenu(){
@@ -516,6 +549,7 @@ function onPlay(){
 
 function startGame(){
   snakes=[]; orbs=[]; particles=[]; kills=0; frame=0;
+  combo=0; comboTimer=0; bonusScore=0; shake=0; freeze=0;
   const p=randWorldPoint(300);
   player=new Snake({name:(playerName||'玩家'),isPlayer:true,
     x:p.x,y:p.y,skin:SKINS[chosenSkin],len:10});
@@ -535,7 +569,7 @@ function gameOver(){
   if(player._sfxBoost){ Sound.boostOff(); player._sfxBoost=false; }
   Sound.die(); Sound.stopMusic();
 
-  const finalScore=Math.max(0,player.score);
+  const finalScore=Math.max(0,player.score)+bonusScore;
   const entry={name:(playerName||'玩家'),score:finalScore,len:Math.floor(player.len),
                kills,ts:Date.now()};
   const rank=saveScore(entry);          // 存档；rank=榜内名次(0起)，-1 未上榜
@@ -561,32 +595,69 @@ function gameOver(){
   setTimeout(()=>overlay.classList.remove('hidden'),650);
 }
 
-// turn a dead snake's body into orbs
+// turn a dead snake's body into orbs —— 向外迸射 + 短暂不可拾取，避免被瞬间吸收看不见
 function scatterSnake(s){
-  const step=Math.max(1,Math.floor(s.pts.length/Math.min(s.pts.length,Math.floor(s.len*0.7))));
-  for(let i=0;i<s.pts.length;i+=step){
-    const p=s.pts[i];
-    spawnOrb(p.x+rand(-6,6),p.y+rand(-6,6),5,s.color);
+  const n = clamp(Math.round(s.len*0.55), 6, 90);   // 球数随体型，但封顶
+  const val = clamp(3 + Math.floor(s.len/120), 4, 12);
+  for(let i=0;i<n;i++){
+    const p = s.pts[Math.min(s.pts.length-1, Math.floor(i/n*s.pts.length))] || s.head;
+    const a = rand(0,TAU), v = rand(1.6,4.2);
+    spawnOrb(p.x+rand(-5,5), p.y+rand(-5,5), val, s.color,
+             Math.cos(a)*v, Math.sin(a)*v, randInt(12,20));
   }
 }
 
 // ===========================================================
 //  Input
 // ===========================================================
-function setPointer(e){
-  const t=e.touches?e.touches[0]:e;
-  pointer.x=t.clientX; pointer.y=t.clientY; pointer.active=true;
-}
+const IS_TOUCH = ('ontouchstart' in window) || (navigator.maxTouchPoints>0)
+              || window.matchMedia('(pointer:coarse)').matches;
+
+// ---- desktop: mouse steers, hold = boost ----
+function setPointer(e){ pointer.x=e.clientX; pointer.y=e.clientY; pointer.active=true; }
 cv.addEventListener('mousemove',setPointer);
-cv.addEventListener('mousedown',e=>{if(e.button===0){boostHeld=true;setPointer(e);}});
+cv.addEventListener('mousedown',e=>{ if(e.button===0){ boostHeld=true; setPointer(e); } });
 window.addEventListener('mouseup',()=>boostHeld=false);
-cv.addEventListener('touchstart',e=>{boostHeld=true;setPointer(e);e.preventDefault();},{passive:false});
-cv.addEventListener('touchmove',e=>{setPointer(e);e.preventDefault();},{passive:false});
-window.addEventListener('touchend',()=>boostHeld=false);
-window.addEventListener('keydown',e=>{
-  if(e.code==='Space'){e.preventDefault();boostHeld=true;}
-});
-window.addEventListener('keyup',e=>{if(e.code==='Space')boostHeld=false;});
+window.addEventListener('keydown',e=>{ if(e.code==='Space'){ e.preventDefault(); boostHeld=true; } });
+window.addEventListener('keyup',e=>{ if(e.code==='Space') boostHeld=false; });
+
+// ---- touch: 左手浮动摇杆控方向，右下独立加速按钮（不再一碰就加速）----
+let steerId=null, steerOX=0, steerOY=0, steerKX=0, steerKY=0;
+cv.addEventListener('touchstart',e=>{
+  for(const t of e.changedTouches){
+    if(steerId===null){
+      steerId=t.identifier; steerOX=steerKX=t.clientX; steerOY=steerKY=t.clientY;
+      touchSteer=true;
+    }
+  }
+  e.preventDefault();
+},{passive:false});
+cv.addEventListener('touchmove',e=>{
+  for(const t of e.changedTouches){
+    if(t.identifier===steerId){
+      steerKX=t.clientX; steerKY=t.clientY;
+      const dx=steerKX-steerOX, dy=steerKY-steerOY;
+      if(dx*dx+dy*dy>20) touchHeading=Math.atan2(dy,dx);
+    }
+  }
+  e.preventDefault();
+},{passive:false});
+function endSteer(e){
+  for(const t of e.changedTouches){ if(t.identifier===steerId){ steerId=null; touchSteer=false; } }
+}
+cv.addEventListener('touchend',endSteer);
+cv.addEventListener('touchcancel',endSteer);
+
+// boost button (touch + mouse for testing)
+const boostBtn=document.getElementById('boostBtn');
+const bOn =e=>{ boostHeld=true;  if(e.cancelable)e.preventDefault(); };
+const bOff=e=>{ boostHeld=false; if(e.cancelable)e.preventDefault(); };
+boostBtn.addEventListener('touchstart',bOn,{passive:false});
+boostBtn.addEventListener('touchend',bOff,{passive:false});
+boostBtn.addEventListener('touchcancel',bOff,{passive:false});
+boostBtn.addEventListener('mousedown',bOn);
+window.addEventListener('mouseup',bOff);
+if(IS_TOUCH){ document.body.classList.add('touch'); }
 
 // ===========================================================
 //  AI
@@ -641,12 +712,16 @@ function eatOrbs(s){
   const r2=r*r;
   for(let i=orbs.length-1;i>=0;i--){
     const o=orbs[i];
+    if(o.delay>0) continue;                 // 刚迸射的球短暂不可吃，先飞出去
     const dx=o.x-s.x, dy=o.y-s.y;
     if(dx*dx+dy*dy < r2){
       s.len += o.val*0.6;
       if(s.isPlayer){
         burst(o.x,o.y,o.color,o.val>=5?10:4,o.val>=5?3:1.8);
         Sound.eat();
+        // ---- 吞噬连击 ----
+        combo++; comboTimer=70;
+        bonusScore += Math.max(1, Math.round(o.val * Math.min(combo,40) * 0.45));
       }
       orbs.splice(i,1);
     } else if(dx*dx+dy*dy < (r+90)*(r+90)){
@@ -681,7 +756,7 @@ function killSnake(s,by){
   s.dead=true;
   scatterSnake(s);
   burst(s.x,s.y,s.color,40,5);
-  if(by && by.isPlayer){ kills++; Sound.kill(); }
+  if(by && by.isPlayer){ kills++; Sound.kill(); shake=Math.max(shake,8); freeze=5; }
 }
 
 // ===========================================================
@@ -695,7 +770,7 @@ function loop(now){
   fpsAcc+=dt; fpsN++;
   if(fpsAcc>500){ fps=Math.round(1000/(fpsAcc/fpsN)); fpsAcc=0;fpsN=0; fpsEl.textContent=fps+' FPS'; }
 
-  if(running) tick();
+  if(running){ if(freeze>0) freeze--; else tick(); }   // freeze = 击杀顿帧
   render();
   requestAnimationFrame(loop);
 }
@@ -704,10 +779,15 @@ function tick(){
   frame++;
   // ----- player control -----
   if(player && !player.dead){
-    // pointer -> world angle
-    const worldPX = camX + (pointer.x - VW/2)/camScale;
-    const worldPY = camY + (pointer.y - VH/2)/camScale;
-    const targetAng = Math.atan2(worldPY-player.y, worldPX-player.x);
+    // 方向：触屏摇杆优先，否则鼠标指针
+    let targetAng;
+    if(touchSteer){
+      targetAng = touchHeading;
+    } else {
+      const worldPX = camX + (pointer.x - VW/2)/camScale;
+      const worldPY = camY + (pointer.y - VH/2)/camScale;
+      targetAng = Math.atan2(worldPY-player.y, worldPX-player.x);
+    }
     player.setAngleToward(targetAng, TURN_RATE);
 
     // boost (costs length + fuel)
@@ -760,9 +840,22 @@ function tick(){
   }
   while(snakes.filter(s=>!s.isPlayer).length < BOT_TARGET){ spawnBot(); }
 
+  // ----- orb physics (迸射球的飞行 + 拾取延迟) -----
+  for(const o of orbs){
+    if(o.delay>0) o.delay--;
+    if(o.vx||o.vy){
+      o.x+=o.vx; o.y+=o.vy; o.vx*=0.9; o.vy*=0.9;
+      if(Math.abs(o.vx)<0.05 && Math.abs(o.vy)<0.05){ o.vx=0; o.vy=0; }
+    }
+  }
   // ----- orbs upkeep -----
   if(orbs.length<ORB_TARGET && frame%3===0) fillOrbs();
   if(orbs.length>ORB_TARGET*1.6){ orbs.splice(0, orbs.length-Math.floor(ORB_TARGET*1.4)); }
+
+  // ----- combo decay -----
+  if(comboTimer>0){ comboTimer--; if(comboTimer===0) combo=0; }
+  // ----- shake decay -----
+  if(shake>0) shake=Math.max(0, shake-0.6);
 
   // ----- particles -----
   for(let i=particles.length-1;i>=0;i--){
@@ -791,13 +884,22 @@ const scoreV=document.getElementById('scoreV'),
       lenV=document.getElementById('lenV'),
       rankV=document.getElementById('rankV'),
       boardList=document.getElementById('boardList'),
-      boostFill=document.getElementById('boostFill');
-let hudT=0;
+      boostFill=document.getElementById('boostFill'),
+      comboHud=document.getElementById('comboHud');
+function playerScore(){ return Math.max(0, player.score) + bonusScore; }
+function comboMult(){ return 1 + Math.min(combo*0.1, 2); }   // 展示用倍率，最高约 x3
 function updateHUD(){
   if(!player) return;
-  scoreV.textContent=Math.max(0,player.score);
+  scoreV.textContent=playerScore();
   lenV.textContent=Math.floor(player.len);
   boostFill.style.width=(player.boostFuel*100)+'%';
+  // combo readout
+  if(combo>=3){
+    comboHud.classList.add('on');
+    comboHud.innerHTML=`<div class="cx">连击 ×${combo}</div><div class="cm">分数加成 ×${comboMult().toFixed(1)}</div>`;
+  } else {
+    comboHud.classList.remove('on');
+  }
   // leaderboard (throttled)
   if(frame%8===0){
     const ranked=[...snakes].sort((a,b)=>b.len-a.len);
@@ -817,14 +919,14 @@ function updateHUD(){
 //  Rendering
 // ===========================================================
 function render(){
-  // background
   ctx.setTransform(DPR,0,0,DPR,0,0);
-  ctx.fillStyle='#05060f';
-  ctx.fillRect(0,0,VW,VH);
+  drawBackground();
 
   ctx.save();
-  // camera transform
-  ctx.translate(VW/2,VH/2);
+  // camera + 击杀震屏
+  const sx = shake>0 ? rand(-shake,shake) : 0;
+  const sy = shake>0 ? rand(-shake,shake) : 0;
+  ctx.translate(VW/2+sx, VH/2+sy);
   ctx.scale(camScale,camScale);
   ctx.translate(-camX,-camY);
 
@@ -838,7 +940,39 @@ function render(){
 
   ctx.restore();
 
+  drawVignette();
+  drawJoystick();
   drawMinimap();
+}
+
+function drawBackground(){
+  ctx.fillStyle='#04050d';
+  ctx.fillRect(0,0,VW,VH);
+  // 屏幕固定的柔和星云,增加层次（便宜,无 shadowBlur）
+  const big=Math.max(VW,VH);
+  const g1=ctx.createRadialGradient(VW*0.24,VH*0.18,0,VW*0.24,VH*0.18,big*0.62);
+  g1.addColorStop(0,'rgba(70,46,128,0.20)'); g1.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=g1; ctx.fillRect(0,0,VW,VH);
+  const g2=ctx.createRadialGradient(VW*0.82,VH*0.86,0,VW*0.82,VH*0.86,big*0.58);
+  g2.addColorStop(0,'rgba(18,84,96,0.18)'); g2.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=g2; ctx.fillRect(0,0,VW,VH);
+}
+
+function drawVignette(){
+  const g=ctx.createRadialGradient(VW/2,VH/2,Math.min(VW,VH)*0.40,VW/2,VH/2,Math.max(VW,VH)*0.72);
+  g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(1,'rgba(0,0,0,0.55)');
+  ctx.fillStyle=g; ctx.fillRect(0,0,VW,VH);
+}
+
+function drawJoystick(){
+  if(!(touchSteer && running)) return;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(steerOX,steerOY,48,0,TAU);
+  ctx.strokeStyle='rgba(150,170,255,0.40)'; ctx.lineWidth=3; ctx.stroke();
+  let dx=steerKX-steerOX, dy=steerKY-steerOY, d=Math.hypot(dx,dy)||1, m=Math.min(d,48);
+  ctx.beginPath(); ctx.arc(steerOX+dx/d*m, steerOY+dy/d*m, 22,0,TAU);
+  ctx.fillStyle='rgba(57,240,200,0.6)'; ctx.fill();
+  ctx.restore();
 }
 
 function drawGrid(){
@@ -874,19 +1008,18 @@ function drawArena(){
 }
 
 function drawOrbs(){
-  // cull to view
-  const view=Math.max(VW,VH)/camScale*0.6+60;
+  // cull to view; 用"半透明光晕+亮芯"两个圆模拟辉光,避开昂贵的 shadowBlur
+  const view=Math.max(VW,VH)/camScale*0.6+80;
   ctx.save();
+  ctx.shadowBlur=0;
   for(const o of orbs){
     if(Math.abs(o.x-camX)>view||Math.abs(o.y-camY)>view) continue;
     o.pulse+=0.06;
     const pr=o.r*(1+Math.sin(o.pulse)*0.12);
-    ctx.beginPath();
-    ctx.arc(o.x,o.y,pr,0,TAU);
-    ctx.fillStyle=o.color;
-    ctx.shadowColor=o.color;
-    ctx.shadowBlur=o.r>6?20:12;
-    ctx.fill();
+    ctx.beginPath(); ctx.arc(o.x,o.y,pr*2.1,0,TAU);
+    ctx.fillStyle=hexRGBA(o.color,0.14); ctx.fill();
+    ctx.beginPath(); ctx.arc(o.x,o.y,pr,0,TAU);
+    ctx.fillStyle=o.color; ctx.fill();
   }
   ctx.restore();
 }
@@ -895,37 +1028,39 @@ function drawSnake(s){
   const r=s.radius;
   const pts=s.pts;
   if(pts.length<2) return;
+  // LOD：远视角或超长时隔点描边,大幅降负载（无 shadowBlur）
+  const step = (camScale<0.85 || pts.length>120) ? 2 : 1;
+  const heat = s.isPlayer ? Math.min(combo/30,1) : 0;   // 连击过热
 
-  // ---- glow underlay ----
   ctx.save();
-  ctx.lineCap='round'; ctx.lineJoin='round';
-  ctx.strokeStyle=hexRGBA(s.color,0.9);
-  ctx.shadowColor=s.color;
-  ctx.shadowBlur=s.isPlayer?26:16;
-  ctx.lineWidth=r*2;
-  strokePath(pts);
+  ctx.lineCap='round'; ctx.lineJoin='round'; ctx.shadowBlur=0;
 
-  // ---- body gradient core ----
-  ctx.shadowBlur=0;
-  ctx.lineWidth=r*2*0.82;
-  ctx.strokeStyle=s.dark;
-  strokePath(pts);
-
-  // ---- bright center highlight ----
-  ctx.lineWidth=r*0.7;
-  ctx.strokeStyle=hexRGBA(s.color,0.85);
-  strokePath(pts);
-
-  // ---- segment scale dots (moving stripes) ----
-  ctx.fillStyle=hexRGBA('#ffffff',0.10);
-  for(let i=0;i<pts.length;i+=3){
-    const p=pts[i];
-    ctx.beginPath(); ctx.arc(p.x,p.y,r*0.3,0,TAU); ctx.fill();
+  // 1) 外发光（宽、半透明）
+  ctx.strokeStyle=hexRGBA(s.color, s.isPlayer?0.20:0.13);
+  ctx.lineWidth=r*2 + (s.isPlayer?14:9);
+  strokePath(pts,step);
+  // 连击过热：额外暖色光晕
+  if(heat>0.02){
+    ctx.strokeStyle=hexRGBA('#ffb24d', 0.22*heat);
+    ctx.lineWidth=r*2 + 16 + heat*16;
+    strokePath(pts,step);
   }
+  // 2) 霓虹底（亮）
+  ctx.strokeStyle=s.color;
+  ctx.lineWidth=r*2;
+  strokePath(pts,step);
+  // 3) 暗芯（盖在亮底上,留出霓虹描边,避免糊成一块）
+  ctx.strokeStyle=s.dark;
+  ctx.lineWidth=Math.max(2, r*2-6);
+  strokePath(pts,step);
+  // 4) 细高光中线
+  ctx.strokeStyle=hexRGBA(s.color,0.8);
+  ctx.lineWidth=Math.max(1, r*0.5);
+  strokePath(pts,step);
   ctx.restore();
 
   // ---- head ----
-  drawHead(s,r);
+  drawHead(s,r,heat);
 
   // ---- name ----
   ctx.save();
@@ -937,21 +1072,27 @@ function drawSnake(s){
   ctx.restore();
 }
 
-function strokePath(pts){
+function strokePath(pts,step){
+  step=step||1;
   ctx.beginPath();
   ctx.moveTo(pts[0].x,pts[0].y);
-  for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x,pts[i].y);
+  for(let i=step;i<pts.length;i+=step) ctx.lineTo(pts[i].x,pts[i].y);
+  const last=pts.length-1;
+  if(last%step!==0) ctx.lineTo(pts[last].x,pts[last].y);  // 保证尾点连上
   ctx.stroke();
 }
 
-function drawHead(s,r){
+function drawHead(s,r,heat){
+  heat=heat||0;
   const a=s.angle;
   ctx.save();
   ctx.translate(s.x,s.y);
   ctx.rotate(a);
-  // head glow circle
+  // head glow circle (单圆, shadowBlur 便宜)
   ctx.beginPath(); ctx.arc(0,0,r*1.05,0,TAU);
-  ctx.fillStyle=s.color; ctx.shadowColor=s.color; ctx.shadowBlur=s.isPlayer?24:14;
+  ctx.fillStyle=s.color;
+  ctx.shadowColor = heat>0.02 ? '#ffb24d' : s.color;
+  ctx.shadowBlur = (s.isPlayer?22:12) + heat*24;
   ctx.fill();
   ctx.shadowBlur=0;
   // eyes
@@ -959,9 +1100,9 @@ function drawHead(s,r){
   for(const sgn of [-1,1]){
     ctx.beginPath(); ctx.arc(ex,sgn*ey,er,0,TAU);
     ctx.fillStyle='#fff'; ctx.fill();
-    // pupil looks toward pointer for player else forward
+    // 瞳孔朝向：玩家用鼠标(非触屏时),其余朝前
     let lookx=er*0.4, looky=0;
-    if(s.isPlayer){
+    if(s.isPlayer && !touchSteer){
       const wpx=camX+(pointer.x-VW/2)/camScale, wpy=camY+(pointer.y-VH/2)/camScale;
       const la=Math.atan2(wpy-s.y,wpx-s.x)-a;
       lookx=Math.cos(la)*er*0.4; looky=Math.sin(la)*er*0.4;
