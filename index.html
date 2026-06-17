@@ -77,11 +77,18 @@
     font-size:15px;outline:none;letter-spacing:1px;
   }
   #nameInput:focus{border-color:var(--neon);box-shadow:0 0 0 3px rgba(57,240,200,.18);}
-  .skins{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:4px;}
+  .lumenBar{font-size:13px;color:#cbd6ff;letter-spacing:1px;margin-top:2px;}
+  .lumenBar b{color:#9fe8ff;font-size:16px;font-variant-numeric:tabular-nums;}
+  .skins{display:flex;gap:9px;justify-content:center;flex-wrap:wrap;margin-top:2px;}
+  .skinItem{display:flex;flex-direction:column;align-items:center;gap:3px;}
   .skin{width:40px;height:40px;border-radius:50%;cursor:pointer;border:2px solid transparent;
+    display:flex;align-items:center;justify-content:center;font-size:15px;
     transition:transform .12s,border-color .12s;}
   .skin:hover{transform:scale(1.12);}
   .skin.sel{border-color:#fff;transform:scale(1.12);box-shadow:0 0 16px rgba(255,255,255,.4);}
+  .skin.locked{filter:grayscale(.35) brightness(.62);}
+  .skinTag{font-size:10px;color:#9fb0e0;letter-spacing:.3px;}
+  .skinTag.warn{color:#ff6b8a;font-weight:700;}
   .btn{pointer-events:auto;cursor:pointer;border:none;border-radius:12px;font-weight:700;
     padding:14px 40px;font-size:17px;letter-spacing:1px;color:#04101a;
     background:linear-gradient(90deg,var(--neon),var(--neon2));
@@ -273,6 +280,13 @@ const MAX_SEG = 200;             // 蛇身渲染段数硬上限（防止超长�
 const SKINS = [
   ['#39f0c8','#1f8f7e'], ['#7c5cff','#3a2a8f'], ['#ff4d9d','#a3206b'],
   ['#ffd24d','#c98a14'], ['#4dafff','#1f5fb0'], ['#8aff5c','#3f9e2c'],
+  ['#7defff','#1c7fae'], ['#ff7a3d','#a8331a'], ['#5cf0c8','#6a4cff'], ['#d7e0ff','#27306a'],
+];
+// 皮肤元信息：前 6 个免费，其余用光尘解锁
+const SKIN_INFO = [
+  {name:'翡翠',cost:0},{name:'紫电',cost:0},{name:'品红',cost:0},
+  {name:'流金',cost:0},{name:'湛蓝',cost:0},{name:'青柠',cost:0},
+  {name:'冰晶',cost:150},{name:'熔岩',cost:280},{name:'极光',cost:450},{name:'暗物质',cost:700},
 ];
 const BOT_NAMES = ['蚀光','虚空','霓裂','猎食者','流星','黯','幽蛇','炽','棱镜','深渊','银河','残响','噬','暮','离子'];
 
@@ -385,6 +399,8 @@ let touchSteer=false, touchHeading=0;
 let paused=false;
 let arenaR=WORLD_R;
 let ev={phase:'idle', timer:1500, t:0, lastKind:'void'};
+// phase 2b: AI 导演侵略性 0..1
+let aggression=0.3;
 function defaultMods(){
   return {lenGain:1, magnet:1, turn:1, speed:1, boostSpeed:1, boostCost:1,
           fuelRegen:1, phase:false, thorns:0, comboBoost:1, comboWindow:1, hit:1};
@@ -422,11 +438,20 @@ function fillOrbs(){
   }
 }
 
+function pickPersona(){
+  const r=Math.random();
+  const hunterP = 0.12 + aggression*0.42;     // 侵略性越高，猎手越多
+  if(r < hunterP) return 'hunter';
+  if(r < hunterP+0.22) return 'ambusher';
+  if(r < hunterP+0.44) return 'farmer';
+  return 'roamer';
+}
 function spawnBot(){
   const p=randWorldPoint(200);
   const skin=SKINS[randInt(0,SKINS.length-1)];
   const s=new Snake({name:BOT_NAMES[randInt(0,BOT_NAMES.length-1)],
     x:p.x,y:p.y,skin,len:rand(10,40)});
+  s.persona=pickPersona();
   snakes.push(s);
   return s;
 }
@@ -631,6 +656,15 @@ refreshSoundBtn();
 // ===========================================================
 //  Persistent high scores (本机排行榜存档)
 // ===========================================================
+// ---- 光尘货币 + 皮肤解锁 ----
+const LM_KEY='neon_snake_lumen', SK_KEY='neon_snake_skins';
+function getLumen(){ return Math.max(0, Math.floor(+(localStorage.getItem(LM_KEY)||0))); }
+function addLumen(n){ try{ localStorage.setItem(LM_KEY, getLumen()+Math.floor(n)); }catch(e){} }
+function spendLumen(n){ const v=getLumen(); if(v<n) return false; try{ localStorage.setItem(LM_KEY, v-n); }catch(e){} return true; }
+function unlockedSkins(){ try{ return new Set(JSON.parse(localStorage.getItem(SK_KEY)||'[]')); }catch(e){ return new Set(); } }
+function skinUnlocked(i){ return SKIN_INFO[i].cost===0 || unlockedSkins().has(i); }
+function unlockSkinSave(i){ const s=unlockedSkins(); s.add(i); try{ localStorage.setItem(SK_KEY,JSON.stringify([...s])); }catch(e){} }
+
 const HS_KEY='neon_snake_scores';
 function loadScores(){ try{ return JSON.parse(localStorage.getItem(HS_KEY)||'[]'); }catch(e){ return []; } }
 function saveScore(entry){
@@ -664,6 +698,7 @@ const MENU_HTML=`
   <div class="title">霓虹吞噬蛇</div>
   <div class="sub">NEON&nbsp;·&nbsp;DEVOURER</div>
   <input id="nameInput" maxlength="12" placeholder="给你的蛇起个名字" />
+  <div class="lumenBar" id="lumenBar"></div>
   <div class="skins" id="skins"></div>
   <button class="btn" id="playBtn">开 始 吞 噬</button>
   <div id="hsBox" class="hsBox"></div>
@@ -679,14 +714,31 @@ function renderMenu(){
   nameInput.value = playerName || localStorage.getItem('neon_snake_name') || '';
   nameInput.addEventListener('keydown',e=>{ if(e.key==='Enter') onPlay(); });
   const skinsEl=card.querySelector('#skins');
-  SKINS.forEach((sk,i)=>{
-    const d=document.createElement('div');
-    d.className='skin'+(i===chosenSkin?' sel':'');
-    d.style.background=`radial-gradient(circle at 35% 30%,${sk[0]},${sk[1]})`;
-    d.style.boxShadow=`0 0 14px ${hexRGBA(sk[0],.6)}`;
-    d.onclick=()=>{ chosenSkin=i; [...skinsEl.children].forEach(c=>c.classList.remove('sel')); d.classList.add('sel'); };
-    skinsEl.appendChild(d);
-  });
+  const lumenBar=card.querySelector('#lumenBar');
+  function refreshLumen(){ lumenBar.innerHTML=`◇ 光尘 <b>${getLumen()}</b>`; }
+  function buildSkins(){
+    skinsEl.innerHTML='';
+    SKINS.forEach((sk,i)=>{
+      const unlocked=skinUnlocked(i);
+      const item=document.createElement('div'); item.className='skinItem';
+      const d=document.createElement('div');
+      d.className='skin'+(i===chosenSkin?' sel':'')+(unlocked?'':' locked');
+      d.style.background=`radial-gradient(circle at 35% 30%,${sk[0]},${sk[1]})`;
+      d.style.boxShadow=`0 0 14px ${hexRGBA(sk[0],.6)}`;
+      if(!unlocked) d.textContent='🔒';
+      const tag=document.createElement('span'); tag.className='skinTag';
+      tag.textContent = unlocked ? SKIN_INFO[i].name : '◇'+SKIN_INFO[i].cost;
+      d.onclick=()=>{
+        if(skinUnlocked(i)){ chosenSkin=i; buildSkins(); }
+        else if(spendLumen(SKIN_INFO[i].cost)){
+          unlockSkinSave(i); chosenSkin=i; if(Sound.levelup)Sound.levelup();
+          refreshLumen(); buildSkins();
+        } else { tag.textContent='光尘不足'; tag.classList.add('warn'); }
+      };
+      item.appendChild(d); item.appendChild(tag); skinsEl.appendChild(item);
+    });
+  }
+  refreshLumen(); buildSkins();
   card.querySelector('#hsBox').innerHTML=scoresHTML();
   card.querySelector('#playBtn').onclick=onPlay;
   overlay.classList.remove('hidden');
@@ -705,7 +757,7 @@ function onPlay(){
 function startGame(){
   snakes=[]; orbs=[]; particles=[]; kills=0; frame=0;
   combo=0; comboTimer=0; bonusScore=0; shake=0; freeze=0;
-  paused=false; arenaR=WORLD_R;
+  paused=false; arenaR=WORLD_R; aggression=0.3;
   ev={phase:'idle', timer:1500, t:0, lastKind:'void'};
   acquired.clear();
   document.getElementById('evolve').classList.remove('show');
@@ -736,6 +788,9 @@ function gameOver(){
   const recordLine = rank===0 ? '<div class="record">★ 新纪录 · 本机最高分 ★</div>'
                   : onBoard ? `<div class="record" style="color:#39f0c8;text-shadow:0 0 14px rgba(57,240,200,.5)">上榜啦 · 第 ${rank+1} 名</div>`
                   : '';
+  // 光尘结算
+  const earned = Math.floor(finalScore/40) + kills*6;
+  addLumen(earned);
   card.innerHTML=`
     <div class="title" style="font-size:clamp(30px,6vw,56px)">已被吞噬</div>
     ${recordLine}
@@ -744,6 +799,7 @@ function gameOver(){
       <div>最大长度<b>${Math.floor(player.len)}</b></div>
       <div>击杀<b>${kills}</b></div>
     </div>
+    <div class="record" style="color:#9fe8ff;text-shadow:0 0 14px rgba(120,200,255,.5)">本局获得 ◇${earned} 光尘 ｜ 共 ◇${getLumen()}</div>
     <div class="menuRow">
       <button class="btn" id="againBtn">再 来 一 局</button>
       <button class="linkBtn" id="menuBtn">返回菜单</button>
@@ -821,46 +877,96 @@ if(IS_TOUCH){ document.body.classList.add('touch'); }
 // ===========================================================
 //  AI
 // ===========================================================
+// 找最近光球(抽样)
+function nearestOrb(s){
+  let best=null,bd=1e9;
+  for(let k=0;k<orbs.length;k+=7){
+    const o=orbs[k]; if(o.delay>0) continue;
+    const d=(o.x-s.x)**2+(o.y-s.y)**2;
+    if(d<bd){bd=d;best=o;}
+  }
+  return best;
+}
+// 找最近的其他蛇(可偏好玩家)
+function nearestPrey(s,preferPlayer){
+  let best=null,bd=1e9;
+  for(const o of snakes){
+    if(o===s||o.dead) continue;
+    let d=(o.x-s.x)**2+(o.y-s.y)**2;
+    if(preferPlayer && o.isPlayer) d*=0.45;   // 更想猎杀玩家
+    if(d<bd){bd=d;best=o;}
+  }
+  return best;
+}
+
 function updateBotAI(s){
   s.aiTimer--;
-  // 找最近光球团 / 躲避边界与他蛇头
   const toCenter=Math.hypot(s.x,s.y);
   let desired=s.angle;
+  let wantBoost=false;
+  const persona=s.persona||'roamer';
 
-  // 边界回避（含虚空收缩时的当前边界）
-  if(toCenter > arenaR*0.78){
-    desired=Math.atan2(-s.y,-s.x); // 朝中心
-  } else {
-    // 周期性挑选一个目标光球
-    if(s.aiTimer<=0 || !s.aiTarget){
-      s.aiTimer=rand(30,90);
-      let best=null,bd=1e9;
-      for(let k=0;k<orbs.length;k+=7){ // 抽样，省性能
-        const o=orbs[k]; const d=(o.x-s.x)**2+(o.y-s.y)**2;
-        if(d<bd){bd=d;best=o;}
-      }
-      s.aiTarget=best;
+  if(toCenter > arenaR*0.80){
+    // 边界回避优先（虚空收缩时也适用）
+    desired=Math.atan2(-s.y,-s.x);
+  } else if(persona==='hunter'){
+    // 猎手：抢到猎物前方,逼它撞上自己身体
+    const prey=nearestPrey(s,true);
+    if(prey){
+      const dist=Math.hypot(prey.x-s.x, prey.y-s.y);
+      const lead=clamp(dist*0.25, 20, 240);
+      const tx=prey.x+Math.cos(prey.angle)*lead;
+      const ty=prey.y+Math.sin(prey.angle)*lead;
+      desired=Math.atan2(ty-s.y, tx-s.x);
+      if(dist<260 && s.len>16 && Math.random()<0.04+aggression*0.08) wantBoost=true;
+    } else { const o=nearestOrb(s); if(o) desired=Math.atan2(o.y-s.y,o.x-s.x); }
+  } else if(persona==='ambusher'){
+    // 伏击者：平时吃球,有蛇接近就切到它前方
+    const prey=nearestPrey(s,false);
+    const dist=prey?Math.hypot(prey.x-s.x,prey.y-s.y):1e9;
+    if(prey && dist<300){
+      const tx=prey.x+Math.cos(prey.angle)*120, ty=prey.y+Math.sin(prey.angle)*120;
+      desired=Math.atan2(ty-s.y,tx-s.x);
+      if(dist<180 && s.len>18 && Math.random()<0.05) wantBoost=true;
+    } else {
+      if(s.aiTimer<=0||!s.aiTarget){ s.aiTimer=rand(30,90); s.aiTarget=nearestOrb(s); }
+      if(s.aiTarget) desired=Math.atan2(s.aiTarget.y-s.y,s.aiTarget.x-s.x);
     }
+  } else {
+    // farmer / roamer：吃球
+    if(s.aiTimer<=0||!s.aiTarget){ s.aiTimer=rand(30,90); s.aiTarget=nearestOrb(s); }
     if(s.aiTarget) desired=Math.atan2(s.aiTarget.y-s.y,s.aiTarget.x-s.x);
   }
 
-  // 躲避其他蛇身体（近距离）
+  // 躲避其他蛇身体（hunter 较莽，farmer 最怂）
+  const avoidR = persona==='farmer'?190 : persona==='hunter'?95 : 130;
+  const avoidW = persona==='farmer'?0.95 : persona==='hunter'?0.55 : 0.8;
   for(const o of snakes){
     if(o===s||o.dead) continue;
-    const hx=o.head.x-s.x, hy=o.head.y-s.y;
-    const dist=Math.hypot(hx,hy);
-    if(dist < 130 && dist>0.1){
-      const away=Math.atan2(s.y-o.y,s.x-o.x);
-      const w=clamp((130-dist)/130,0,1);
-      desired=lerp(desired, away, w*0.8);
+    const dist=Math.hypot(o.x-s.x, o.y-s.y);
+    if(dist < avoidR && dist>0.1){
+      const away=Math.atan2(s.y-o.y, s.x-o.x);
+      desired=lerp(desired, away, clamp((avoidR-dist)/avoidR,0,1)*avoidW);
     }
   }
 
-  s.boosting = false; // bots occasionally boost
-  if(s.len>15 && Math.random()<0.004) s._boostUntil=frame+randInt(20,50);
+  // boost
+  s.boosting=false;
+  if(wantBoost && s.len>13) s._boostUntil=frame+randInt(16,40);
+  else if(s.len>15 && Math.random()<0.003) s._boostUntil=frame+randInt(18,40);
   if(s._boostUntil && frame<s._boostUntil && s.len>12){ s.boosting=true; s.len-=0.04; }
 
-  s.setAngleToward(desired, TURN_RATE*0.9);
+  s.setAngleToward(desired, TURN_RATE*0.92);
+}
+
+// 动态导演：按玩家强弱调整侵略性
+function updateDirector(){
+  if(!player||player.dead) return;
+  if(frame%90!==0) return;
+  const ranked=[...snakes].sort((a,b)=>b.len-a.len);
+  const top1 = ranked.indexOf(player)===0;
+  let target = 0.22 + (top1?0.35:0) + clamp((player.len-160)/900,0,0.35);
+  aggression = lerp(aggression, clamp(target,0.12,0.92), 1);
 }
 
 // ===========================================================
@@ -977,7 +1083,8 @@ function tick(){
     else if(!canBoost && player._sfxBoost){ Sound.boostOff(); player._sfxBoost=false; }
   }
 
-  // ----- AI -----
+  // ----- AI + 导演 -----
+  updateDirector();
   for(const s of snakes){ if(s!==player && !s.dead) updateBotAI(s); }
 
   // ----- move -----
