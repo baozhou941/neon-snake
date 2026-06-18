@@ -15,6 +15,7 @@
     color:#e8ecff;user-select:none;-webkit-user-select:none;
     touch-action:none;cursor:crosshair;
   }
+  #screen{position:fixed;top:0;left:0;width:100%;height:100%;overflow:hidden;}
   #stage{position:fixed;inset:0;display:block;}
 
   /* ---------- HUD ---------- */
@@ -153,16 +154,6 @@
   /* 手机端：显示小地图(右上,避开加速按钮)、隐藏排行榜腾空间 */
   body.touch #board{display:none;}
   body.touch #mini{display:block;top:12px;right:12px;bottom:auto;width:104px;height:104px;}
-  /* 横屏引导覆盖层 */
-  #rotate{position:fixed;inset:0;z-index:30;display:none;flex-direction:column;
-    align-items:center;justify-content:center;gap:14px;text-align:center;
-    background:radial-gradient(circle at 50% 45%,rgba(16,12,36,.96),rgba(3,4,11,.99));}
-  #rotate.show{display:flex;}
-  #rotate .rotIcon{font-size:64px;animation:rotpulse 1.6s ease-in-out infinite;}
-  #rotate .rotTxt{font-size:26px;font-weight:800;letter-spacing:3px;color:#39f0c8;
-    text-shadow:0 0 18px rgba(57,240,200,.5);}
-  #rotate .rotSub{font-size:14px;color:#9fb0e0;letter-spacing:1px;}
-  @keyframes rotpulse{0%,100%{transform:rotate(-12deg);}50%{transform:rotate(12deg);}}
   /* 光谱进化 三选一 */
   #evolve{position:fixed;inset:0;z-index:18;display:none;flex-direction:column;
     align-items:center;justify-content:center;gap:16px;text-align:center;
@@ -207,6 +198,7 @@
 </style>
 </head>
 <body>
+<div id="screen">
 <canvas id="stage"></canvas>
 
 <!-- HUD -->
@@ -230,9 +222,6 @@
 <button id="boostBtn" aria-label="加速冲刺">⚡<span>加速</span></button>
 <div class="fps" id="fps"></div>
 <button id="soundBtn" title="音效 / 音乐开关">🔊</button>
-
-<!-- 横屏引导（触屏竖屏时显示） -->
-<div id="rotate"><div class="rotIcon">📱↻</div><div class="rotTxt">请横屏游玩</div><div class="rotSub">横屏视野更大、操作更顺手</div></div>
 
 <!-- 动态事件横幅 -->
 <div id="eventBanner"></div>
@@ -258,6 +247,7 @@
     </div>
   </div>
 </div>
+</div><!-- /#screen -->
 
 <script>
 "use strict";
@@ -271,17 +261,46 @@ const cv = document.getElementById('stage');
 const ctx = cv.getContext('2d');
 const mini = document.getElementById('mini');
 const mctx = mini.getContext('2d');
-let DPR = Math.min(window.devicePixelRatio || 1, 2);
-let VW = 0, VH = 0;
+const IS_TOUCH = ('ontouchstart' in window) || (navigator.maxTouchPoints>0)
+              || window.matchMedia('(pointer:coarse)').matches;
+let DPR = 1, VW = 0, VH = 0;
+let rot = false;                       // 是否强制旋转成横屏（微信/竖屏锁定时）
+
 function resize(){
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
-  VW = window.innerWidth; VH = window.innerHeight;
+  // 手机降采样以保性能（含加速时的流畅度）
+  DPR = Math.min(window.devicePixelRatio || 1, IS_TOUCH ? 1.5 : 2);
+  if(rot){ VW = window.innerHeight; VH = window.innerWidth; }
+  else   { VW = window.innerWidth;  VH = window.innerHeight; }
   cv.width = VW * DPR; cv.height = VH * DPR;
   cv.style.width = VW + 'px'; cv.style.height = VH + 'px';
   ctx.setTransform(DPR,0,0,DPR,0,0);
 }
-window.addEventListener('resize', resize);
-resize();
+
+// 触屏竖屏时，用 CSS 把整个游戏旋转成横屏（不依赖系统/微信旋转）
+function applyOrientation(){
+  const portrait = window.innerHeight > window.innerWidth;
+  rot = IS_TOUCH && portrait;
+  const sc = document.getElementById('screen');
+  if(sc){
+    if(rot){
+      const W=window.innerWidth, H=window.innerHeight;
+      sc.style.width=H+'px'; sc.style.height=W+'px';
+      sc.style.transformOrigin='0 0';
+      sc.style.transform='translateX('+W+'px) rotate(90deg)';
+    } else {
+      sc.style.width=''; sc.style.height='';
+      sc.style.transform=''; sc.style.transformOrigin='';
+    }
+  }
+  resize();
+}
+// 把屏幕坐标(clientX/Y)换算到游戏坐标（旋转时需变换）
+function evToGame(cx,cy){
+  return rot ? {x:cy, y:window.innerWidth-cx} : {x:cx, y:cy};
+}
+window.addEventListener('resize', applyOrientation);
+window.addEventListener('orientationchange', ()=>setTimeout(applyOrientation,150));
+applyOrientation();
 
 // ---------- world ----------
 const WORLD_R = 2600;            // 圆形竞技场半径
@@ -289,8 +308,8 @@ const SEG_SPACING = 4.2;         // 身体采样点间距
 const BASE_SPEED = 2.45;
 const BOOST_SPEED = 4.7;
 const TURN_RATE = 0.115;         // 玩家最大转向（弧度/帧）
-const ORB_TARGET = 300;          // 场上光球目标数量（性能权衡）
-const BOT_TARGET = 9;            // AI 数量
+const ORB_TARGET = 380;          // 场上光球目标数量
+const BOT_TARGET = 16;           // AI 数量（更热闹的对战）
 const MAX_SEG = 200;             // 蛇身渲染段数硬上限（防止超长卡顿）
 
 const SKINS = [
@@ -787,7 +806,6 @@ function startGame(){
   running=true;
   overlay.classList.add('hidden');
   Sound.startMusic();
-  checkOrient();
 }
 
 function gameOver(){
@@ -825,7 +843,6 @@ function gameOver(){
   card.querySelector('#againBtn').onclick=()=>{ overlay.classList.add('hidden'); startGame(); };
   card.querySelector('#menuBtn').onclick=renderMenu;
   setTimeout(()=>overlay.classList.remove('hidden'),650);
-  checkOrient();   // 结束后隐藏横屏提示
 }
 
 // turn a dead snake's body into orbs —— 向外迸射 + 短暂不可拾取，避免被瞬间吸收看不见
@@ -843,26 +860,24 @@ function scatterSnake(s){
 // ===========================================================
 //  Input
 // ===========================================================
-const IS_TOUCH = ('ontouchstart' in window) || (navigator.maxTouchPoints>0)
-              || window.matchMedia('(pointer:coarse)').matches;
 const BASE_ZOOM = IS_TOUCH ? 0.72 : 0.9;   // 拉远相机扩大视野(手机更明显)
 let edgeBoost=false;                        // 摇杆推到底=加速(单指可玩)
 
 // ---- desktop: mouse steers, hold = boost ----
-function setPointer(e){ pointer.x=e.clientX; pointer.y=e.clientY; pointer.active=true; }
+function setPointer(e){ const p=evToGame(e.clientX,e.clientY); pointer.x=p.x; pointer.y=p.y; pointer.active=true; }
 cv.addEventListener('mousemove',setPointer);
 cv.addEventListener('mousedown',e=>{ if(e.button===0){ boostHeld=true; setPointer(e); } });
 window.addEventListener('mouseup',()=>boostHeld=false);
 window.addEventListener('keydown',e=>{ if(e.code==='Space'){ e.preventDefault(); boostHeld=true; } });
 window.addEventListener('keyup',e=>{ if(e.code==='Space') boostHeld=false; });
 
-// ---- touch: 左手浮动摇杆控方向，右下独立加速按钮（不再一碰就加速）----
+// ---- touch: 左手浮动摇杆控方向，右下独立加速按钮（坐标经旋转变换）----
 let steerId=null, steerOX=0, steerOY=0, steerKX=0, steerKY=0;
 cv.addEventListener('touchstart',e=>{
   for(const t of e.changedTouches){
     if(steerId===null){
-      steerId=t.identifier; steerOX=steerKX=t.clientX; steerOY=steerKY=t.clientY;
-      touchSteer=true;
+      steerId=t.identifier; const g=evToGame(t.clientX,t.clientY);
+      steerOX=steerKX=g.x; steerOY=steerKY=g.y; touchSteer=true;
     }
   }
   e.preventDefault();
@@ -870,7 +885,7 @@ cv.addEventListener('touchstart',e=>{
 cv.addEventListener('touchmove',e=>{
   for(const t of e.changedTouches){
     if(t.identifier===steerId){
-      steerKX=t.clientX; steerKY=t.clientY;
+      const g=evToGame(t.clientX,t.clientY); steerKX=g.x; steerKY=g.y;
       const dx=steerKX-steerOX, dy=steerKY-steerOY, d2=dx*dx+dy*dy;
       if(d2>20) touchHeading=Math.atan2(dy,dx);
       edgeBoost = d2 > 78*78;        // 推到底自动冲刺
@@ -894,16 +909,6 @@ boostBtn.addEventListener('touchcancel',bOff,{passive:false});
 boostBtn.addEventListener('mousedown',bOn);
 window.addEventListener('mouseup',bOff);
 if(IS_TOUCH){ document.body.classList.add('touch'); }
-
-// 横屏引导：触屏竖屏时提示旋转并暂停
-let portraitBlock=false;
-function checkOrient(){
-  portraitBlock = IS_TOUCH && (window.innerHeight > window.innerWidth);
-  const r=document.getElementById('rotate');
-  if(r) r.classList.toggle('show', portraitBlock && running);
-}
-window.addEventListener('resize', checkOrient);
-window.addEventListener('orientationchange', ()=>setTimeout(checkOrient,200));
 
 // ===========================================================
 //  AI
@@ -1073,8 +1078,8 @@ function loop(now){
   fpsAcc+=dt; fpsN++;
   if(fpsAcc>500){ fps=Math.round(1000/(fpsAcc/fpsN)); fpsAcc=0;fpsN=0; fpsEl.textContent=fps+' FPS'; }
 
-  // freeze=击杀顿帧, paused=进化选择, portraitBlock=竖屏暂停
-  if(running && !paused && !portraitBlock){ if(freeze>0) freeze--; else tick(); }
+  // freeze=击杀顿帧, paused=进化选择
+  if(running && !paused){ if(freeze>0) freeze--; else tick(); }
   render();
   requestAnimationFrame(loop);
 }
@@ -1100,12 +1105,12 @@ function tick(){
     if(canBoost){
       player.len -= 0.06*player.mods.boostCost;
       player.boostFuel = clamp(player.boostFuel - 0.012*player.mods.boostCost, 0, 1);
-      // drop a small orb trail
-      if(frame%4===0){
+      // drop a small orb trail (节流以保流畅)
+      if(frame%7===0){
         const tx=player.x-Math.cos(player.angle)*player.radius;
         const ty=player.y-Math.sin(player.angle)*player.radius;
         spawnOrb(tx,ty,1,player.color);
-        burst(tx,ty,player.color,2,1.4);
+        if(!IS_TOUCH) burst(tx,ty,player.color,2,1.4);
       }
     } else {
       player.boostFuel = clamp(player.boostFuel + 0.005*player.mods.fuelRegen, 0, 1);
@@ -1434,10 +1439,11 @@ function drawHead(s,r,heat){
 
 function drawParticles(){
   ctx.save();
+  ctx.shadowBlur=0;                 // 去掉逐粒子辉光,显著降低加速/击杀时的开销
   for(const p of particles){
     ctx.globalAlpha=clamp(p.life,0,1);
     ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,TAU);
-    ctx.fillStyle=p.color; ctx.shadowColor=p.color; ctx.shadowBlur=8;
+    ctx.fillStyle=p.color;
     ctx.fill();
   }
   ctx.globalAlpha=1;
