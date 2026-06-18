@@ -149,7 +149,20 @@
   #boostBtn:active{transform:scale(.94);background:radial-gradient(circle at 50% 38%,rgba(57,240,200,.6),rgba(10,18,34,.7));}
   body.touch #boostBtn{display:flex;}
   body.touch #boostTip{display:none;}
-  body.touch #boostWrap{bottom:auto;top:auto;left:18px;right:auto;bottom:54px;transform:none;width:120px;}
+  body.touch #boostWrap{left:18px;right:auto;bottom:54px;transform:none;width:120px;}
+  /* 手机端：显示小地图(右上,避开加速按钮)、隐藏排行榜腾空间 */
+  body.touch #board{display:none;}
+  body.touch #mini{display:block;top:12px;right:12px;bottom:auto;width:104px;height:104px;}
+  /* 横屏引导覆盖层 */
+  #rotate{position:fixed;inset:0;z-index:30;display:none;flex-direction:column;
+    align-items:center;justify-content:center;gap:14px;text-align:center;
+    background:radial-gradient(circle at 50% 45%,rgba(16,12,36,.96),rgba(3,4,11,.99));}
+  #rotate.show{display:flex;}
+  #rotate .rotIcon{font-size:64px;animation:rotpulse 1.6s ease-in-out infinite;}
+  #rotate .rotTxt{font-size:26px;font-weight:800;letter-spacing:3px;color:#39f0c8;
+    text-shadow:0 0 18px rgba(57,240,200,.5);}
+  #rotate .rotSub{font-size:14px;color:#9fb0e0;letter-spacing:1px;}
+  @keyframes rotpulse{0%,100%{transform:rotate(-12deg);}50%{transform:rotate(12deg);}}
   /* 光谱进化 三选一 */
   #evolve{position:fixed;inset:0;z-index:18;display:none;flex-direction:column;
     align-items:center;justify-content:center;gap:16px;text-align:center;
@@ -217,6 +230,9 @@
 <button id="boostBtn" aria-label="加速冲刺">⚡<span>加速</span></button>
 <div class="fps" id="fps"></div>
 <button id="soundBtn" title="音效 / 音乐开关">🔊</button>
+
+<!-- 横屏引导（触屏竖屏时显示） -->
+<div id="rotate"><div class="rotIcon">📱↻</div><div class="rotTxt">请横屏游玩</div><div class="rotSub">横屏视野更大、操作更顺手</div></div>
 
 <!-- 动态事件横幅 -->
 <div id="eventBanner"></div>
@@ -704,7 +720,7 @@ const MENU_HTML=`
   <div id="hsBox" class="hsBox"></div>
   <div class="help">
     <b>电脑</b>：鼠标控方向 · 按住左键/空格 冲刺<br>
-    <b>手机</b>：左手滑动摇杆控方向 · 右下「加速」按钮冲刺<br>
+    <b>手机</b>：横屏 · 滑动摇杆控方向 · 推到底 或 右下按钮 冲刺<br>
     连续吞球攒<b>连击</b>飙分，撞别人蛇身把它爆成光点再吃掉
   </div>`;
 
@@ -771,6 +787,7 @@ function startGame(){
   running=true;
   overlay.classList.add('hidden');
   Sound.startMusic();
+  checkOrient();
 }
 
 function gameOver(){
@@ -808,6 +825,7 @@ function gameOver(){
   card.querySelector('#againBtn').onclick=()=>{ overlay.classList.add('hidden'); startGame(); };
   card.querySelector('#menuBtn').onclick=renderMenu;
   setTimeout(()=>overlay.classList.remove('hidden'),650);
+  checkOrient();   // 结束后隐藏横屏提示
 }
 
 // turn a dead snake's body into orbs —— 向外迸射 + 短暂不可拾取，避免被瞬间吸收看不见
@@ -827,6 +845,8 @@ function scatterSnake(s){
 // ===========================================================
 const IS_TOUCH = ('ontouchstart' in window) || (navigator.maxTouchPoints>0)
               || window.matchMedia('(pointer:coarse)').matches;
+const BASE_ZOOM = IS_TOUCH ? 0.72 : 0.9;   // 拉远相机扩大视野(手机更明显)
+let edgeBoost=false;                        // 摇杆推到底=加速(单指可玩)
 
 // ---- desktop: mouse steers, hold = boost ----
 function setPointer(e){ pointer.x=e.clientX; pointer.y=e.clientY; pointer.active=true; }
@@ -851,14 +871,15 @@ cv.addEventListener('touchmove',e=>{
   for(const t of e.changedTouches){
     if(t.identifier===steerId){
       steerKX=t.clientX; steerKY=t.clientY;
-      const dx=steerKX-steerOX, dy=steerKY-steerOY;
-      if(dx*dx+dy*dy>20) touchHeading=Math.atan2(dy,dx);
+      const dx=steerKX-steerOX, dy=steerKY-steerOY, d2=dx*dx+dy*dy;
+      if(d2>20) touchHeading=Math.atan2(dy,dx);
+      edgeBoost = d2 > 78*78;        // 推到底自动冲刺
     }
   }
   e.preventDefault();
 },{passive:false});
 function endSteer(e){
-  for(const t of e.changedTouches){ if(t.identifier===steerId){ steerId=null; touchSteer=false; } }
+  for(const t of e.changedTouches){ if(t.identifier===steerId){ steerId=null; touchSteer=false; edgeBoost=false; } }
 }
 cv.addEventListener('touchend',endSteer);
 cv.addEventListener('touchcancel',endSteer);
@@ -873,6 +894,16 @@ boostBtn.addEventListener('touchcancel',bOff,{passive:false});
 boostBtn.addEventListener('mousedown',bOn);
 window.addEventListener('mouseup',bOff);
 if(IS_TOUCH){ document.body.classList.add('touch'); }
+
+// 横屏引导：触屏竖屏时提示旋转并暂停
+let portraitBlock=false;
+function checkOrient(){
+  portraitBlock = IS_TOUCH && (window.innerHeight > window.innerWidth);
+  const r=document.getElementById('rotate');
+  if(r) r.classList.toggle('show', portraitBlock && running);
+}
+window.addEventListener('resize', checkOrient);
+window.addEventListener('orientationchange', ()=>setTimeout(checkOrient,200));
 
 // ===========================================================
 //  AI
@@ -1042,7 +1073,8 @@ function loop(now){
   fpsAcc+=dt; fpsN++;
   if(fpsAcc>500){ fps=Math.round(1000/(fpsAcc/fpsN)); fpsAcc=0;fpsN=0; fpsEl.textContent=fps+' FPS'; }
 
-  if(running && !paused){ if(freeze>0) freeze--; else tick(); }   // freeze=击杀顿帧, paused=进化选择
+  // freeze=击杀顿帧, paused=进化选择, portraitBlock=竖屏暂停
+  if(running && !paused && !portraitBlock){ if(freeze>0) freeze--; else tick(); }
   render();
   requestAnimationFrame(loop);
 }
@@ -1062,8 +1094,8 @@ function tick(){
     }
     player.setAngleToward(targetAng, TURN_RATE*player.mods.turn);
 
-    // boost (costs length + fuel)
-    const canBoost = boostHeld && player.len>12 && player.boostFuel>0.04;
+    // boost (costs length + fuel) —— 按钮/空格/左键 或 摇杆推到底
+    const canBoost = (boostHeld||edgeBoost) && player.len>12 && player.boostFuel>0.04;
     player.boosting = canBoost;
     if(canBoost){
       player.len -= 0.06*player.mods.boostCost;
@@ -1152,8 +1184,8 @@ function tick(){
   if(player){
     camX=lerp(camX,player.x,0.12);
     camY=lerp(camY,player.y,0.12);
-    // zoom out a bit as you grow
-    const targetScale=clamp(1.05 - (player.radius-7)*0.012, 0.62, 1.05);
+    // zoom out as you grow（乘 BASE_ZOOM 扩大视野，手机更明显）
+    const targetScale=clamp(1.05 - (player.radius-7)*0.012, 0.6, 1.05) * BASE_ZOOM;
     camScale=lerp(camScale,targetScale,0.04);
   }
 
@@ -1251,10 +1283,13 @@ function drawJoystick(){
   if(!(touchSteer && running)) return;
   ctx.save();
   ctx.beginPath(); ctx.arc(steerOX,steerOY,48,0,TAU);
-  ctx.strokeStyle='rgba(150,170,255,0.40)'; ctx.lineWidth=3; ctx.stroke();
+  ctx.strokeStyle = edgeBoost?'rgba(255,178,77,0.7)':'rgba(150,170,255,0.40)';
+  ctx.lineWidth=3; ctx.stroke();
   let dx=steerKX-steerOX, dy=steerKY-steerOY, d=Math.hypot(dx,dy)||1, m=Math.min(d,48);
   ctx.beginPath(); ctx.arc(steerOX+dx/d*m, steerOY+dy/d*m, 22,0,TAU);
-  ctx.fillStyle='rgba(57,240,200,0.6)'; ctx.fill();
+  ctx.fillStyle = edgeBoost?'rgba(255,178,77,0.85)':'rgba(57,240,200,0.6)';
+  ctx.fill();
+  if(edgeBoost){ ctx.shadowColor='#ffb24d'; ctx.shadowBlur=16; ctx.fill(); }
   ctx.restore();
 }
 
