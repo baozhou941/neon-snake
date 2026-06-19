@@ -311,6 +311,7 @@ const TURN_RATE = 0.115;         // 玩家最大转向（弧度/帧）
 const ORB_TARGET = 380;          // 场上光球目标数量
 const BOT_TARGET = 16;           // AI 数量（更热闹的对战）
 const MAX_SEG = 200;             // 蛇身渲染段数硬上限（防止超长卡顿）
+const SHIELD_FRAMES = 330;       // 出生/重生护盾时长(约5.5秒)
 
 const SKINS = [
   ['#39f0c8','#1f8f7e'], ['#7c5cff','#3a2a8f'], ['#ff4d9d','#a3206b'],
@@ -374,6 +375,7 @@ class Snake{
     this.boostFuel = 1;          // 0..1 用于玩家冲刺耗能
     this.mods = defaultMods();   // 光谱进化修正（仅玩家会改）
     this.mutLevel = 0;           // 已触发的里程碑数
+    this.shield = 0;             // 护盾帧数（>0 时免疫死亡）
   }
   get radius(){ return radiusFor(this.len); }
   get head(){ return this.pts[0]; }
@@ -438,13 +440,14 @@ let ev={phase:'idle', timer:1500, t:0, lastKind:'void'};
 let aggression=0.3;
 function defaultMods(){
   return {lenGain:1, magnet:1, turn:1, speed:1, boostSpeed:1, boostCost:1,
-          fuelRegen:1, phase:false, thorns:0, comboBoost:1, comboWindow:1, hit:1};
+          fuelRegen:1, phase:false, thorns:0, comboBoost:1, comboWindow:1, hit:1,
+          bloodlust:false, revive:0};
 }
-// 长度里程碑：达到即触发一次三选一
-const MILESTONES=[30,70,130,210,320,470,660,900,1200,1600,2100,2700];
+// 长度里程碑：达到即触发一次三选一（间隔拉大，减少打断）
+const MILESTONES=[60,150,280,450,660,920,1230,1600,2050,2600];
 function milestoneAt(level){
   return level<MILESTONES.length ? MILESTONES[level]
-       : MILESTONES[MILESTONES.length-1] + (level-MILESTONES.length+1)*800;
+       : MILESTONES[MILESTONES.length-1] + (level-MILESTONES.length+1)*900;
 }
 
 // orb: {x,y,r,color,val,pulse,vx,vy,delay}
@@ -504,18 +507,35 @@ function burst(x,y,color,n,spd){
 //  光谱进化（三选一构筑）
 // ===========================================================
 const MUTATIONS=[
-  {id:'gluttony', group:'green',icon:'🟢',name:'贪食',desc:'吞球成长 +25%',          apply:p=>p.mods.lenGain*=1.25},
-  {id:'magnet',   group:'green',icon:'🧲',name:'磁极',desc:'吸球范围 +35%',          apply:p=>p.mods.magnet*=1.35},
-  {id:'amplify',  group:'green',icon:'✴️',name:'增幅',desc:'连击加成↑·持续更久',     apply:p=>{p.mods.comboBoost*=1.4; p.mods.comboWindow*=1.3;}},
-  {id:'agile',    group:'blue', icon:'🌀',name:'灵蛇',desc:'转向更灵活 +18%',         apply:p=>p.mods.turn*=1.18},
-  {id:'swift',    group:'blue', icon:'💨',name:'疾风',desc:'移动速度 +10%',           apply:p=>p.mods.speed*=1.1},
-  {id:'efficient',group:'blue', icon:'🔋',name:'节能',desc:'冲刺更省·回能更快',       apply:p=>{p.mods.boostCost*=0.78; p.mods.fuelRegen*=1.6;}},
-  {id:'steady',   group:'blue', icon:'🛡',name:'稳健',desc:'命中体积 -10%·更难被撞死',apply:p=>p.mods.hit=Math.max(0.55,p.mods.hit*0.9)},
-  {id:'blade',    group:'red',  icon:'⚡',name:'利刃',desc:'冲刺速度 +18%',           apply:p=>p.mods.boostSpeed*=1.18},
+  // 🟢 成长系
+  {id:'gluttony', group:'green',icon:'🟢',name:'贪食',desc:'吞球成长 +35%',          apply:p=>p.mods.lenGain*=1.35},
+  {id:'magnet',   group:'green',icon:'🧲',name:'磁极',desc:'吸球范围 +45%',          apply:p=>p.mods.magnet*=1.45},
+  {id:'amplify',  group:'green',icon:'✴️',name:'增幅',desc:'连击加成↑·持续更久',     apply:p=>{p.mods.comboBoost*=1.5; p.mods.comboWindow*=1.4;}},
+  {id:'revive',   group:'green',icon:'♻️',name:'涅槃',desc:'死亡时原地复活一次(护盾+长度减半)',unique:true,apply:p=>p.mods.revive=(p.mods.revive||0)+1},
+  // 🔵 机动系
+  {id:'agile',    group:'blue', icon:'🌀',name:'灵蛇',desc:'转向更灵活 +22%',         apply:p=>p.mods.turn*=1.22},
+  {id:'swift',    group:'blue', icon:'💨',name:'疾风',desc:'移动速度 +13%',           apply:p=>p.mods.speed*=1.13},
+  {id:'efficient',group:'blue', icon:'🔋',name:'节能',desc:'冲刺更省·回能更快',       apply:p=>{p.mods.boostCost*=0.72; p.mods.fuelRegen*=1.7;}},
+  {id:'steady',   group:'blue', icon:'🛡',name:'稳健',desc:'命中体积 -13%·更难被撞死',apply:p=>p.mods.hit=Math.max(0.5,p.mods.hit*0.87)},
+  // 🔴 攻击系
+  {id:'blade',    group:'red',  icon:'⚡',name:'利刃',desc:'冲刺速度 +22%',           apply:p=>p.mods.boostSpeed*=1.22},
   {id:'thorns',   group:'red',  icon:'🌵',name:'棘刺',desc:'击杀获得额外吞噬奖励',     apply:p=>p.mods.thorns+=1},
+  {id:'bloodlust',group:'red',  icon:'🩸',name:'嗜血',desc:'击杀回满冲刺并额外成长',   unique:true,apply:p=>p.mods.bloodlust=true},
   {id:'phase',    group:'red',  icon:'👻',name:'相位',desc:'冲刺时蛇头可穿身不死',unique:true,apply:p=>p.mods.phase=true},
 ];
 let acquired=new Set();
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=randInt(0,i); const t=a[i]; a[i]=a[j]; a[j]=t; } return a; }
+// 三选一：尽量每个颜色系各出一张，决策更清晰(攻击/成长/机动)
+function rollChoices(pool){
+  const g={red:[],green:[],blue:[]};
+  pool.forEach(m=>g[m.group].push(m));
+  const order=shuffle(['red','green','blue'].filter(k=>g[k].length));
+  const pick=[];
+  for(const k of order){ if(pick.length<3) pick.push(g[k][randInt(0,g[k].length-1)]); }
+  const rest=shuffle(pool.filter(m=>!pick.includes(m)));
+  while(pick.length<3 && rest.length) pick.push(rest.pop());
+  return shuffle(pick);
+}
 const evolveEl=document.getElementById('evolve');
 const evCardsEl=document.getElementById('evCards');
 
@@ -524,8 +544,7 @@ function openEvolve(){
   if(player._sfxBoost){ Sound.boostOff(); player._sfxBoost=false; }
   Sound.levelup();
   const pool=MUTATIONS.filter(m=>!(m.unique && acquired.has(m.id)));
-  const tmp=pool.slice(), pick=[];
-  while(pick.length<3 && tmp.length) pick.push(tmp.splice(randInt(0,tmp.length-1),1)[0]);
+  const pick=rollChoices(pool);
   evCardsEl.innerHTML='';
   pick.forEach(m=>{
     const d=document.createElement('div');
@@ -799,6 +818,7 @@ function startGame(){
   const p=randWorldPoint(300);
   player=new Snake({name:(playerName||'玩家'),isPlayer:true,
     x:p.x,y:p.y,skin:SKINS[chosenSkin],len:10});
+  player.shield=SHIELD_FRAMES;          // 出生护盾
   snakes.push(player);
   for(let i=0;i<BOT_TARGET;i++) spawnBot();
   fillOrbs();
@@ -806,6 +826,7 @@ function startGame(){
   running=true;
   overlay.classList.add('hidden');
   Sound.startMusic();
+  banner('🛡 护盾保护中 · 趁机抢占地盘！','#39f0c8');
 }
 
 function gameOver(){
@@ -1064,7 +1085,23 @@ function killSnake(s,by){
   if(by && by.isPlayer){
     kills++; Sound.kill(); shake=Math.max(shake,8); freeze=5;
     if(by.mods.thorns>0) by.len += 5*by.mods.thorns;   // 棘刺：击杀额外吞噬奖励
+    if(by.mods.bloodlust){ by.boostFuel=1; by.len += 8; }  // 嗜血：击杀回满冲刺+额外成长
   }
+}
+
+// 涅槃复活：原地复活、减半长度、给护盾；近边界则拉回场内
+function revivePlayer(byWall){
+  player.mods.revive--;
+  player.shield=SHIELD_FRAMES;
+  player.len=Math.max(20, player.len*0.6);
+  combo=0;
+  if(byWall || Math.hypot(player.x,player.y) > arenaR*0.9){
+    const d=Math.hypot(player.x,player.y)||1, k=(arenaR*0.6)/d;
+    player.x*=k; player.y*=k;
+  }
+  burst(player.x,player.y,'#39f0c8',50,5);
+  Sound.levelup();
+  banner('♻ 涅槃重生！','#39f0c8');
 }
 
 // ===========================================================
@@ -1135,9 +1172,12 @@ function tick(){
     if(s.dead) continue;
     const c=checkCrash(s);
     if(c){
-      if(c.wall){ killSnake(s,null); }
+      if(s===player && player.shield>0){ /* 护盾：免疫一切伤害 */ }
       // 相位：玩家冲刺时蛇头可穿过他蛇身体而不死
-      else if(s===player && player.mods.phase && player.boosting){ /* 穿身而过 */ }
+      else if(s===player && player.mods.phase && player.boosting && !c.wall){ /* 穿身而过 */ }
+      // 涅槃：死亡时消耗一次复活
+      else if(s===player && player.mods.revive>0){ revivePlayer(c.wall); }
+      else if(c.wall){ killSnake(s,null); }
       else { killSnake(s, c); }
     }
   }
@@ -1167,6 +1207,8 @@ function tick(){
   if(comboTimer>0){ comboTimer--; if(comboTimer===0) combo=0; }
   // ----- shake decay -----
   if(shake>0) shake=Math.max(0, shake-0.6);
+  // ----- shield countdown -----
+  if(player && !player.dead && player.shield>0) player.shield--;
 
   // ----- dynamic events -----
   updateEvents();
@@ -1385,6 +1427,19 @@ function drawSnake(s){
 
   // ---- head ----
   drawHead(s,r,heat);
+
+  // ---- 护盾光环 ----
+  if(s.isPlayer && s.shield>0){
+    const blink = s.shield<54 && (Math.floor(s.shield/6)%2===0);  // 末段闪烁提示
+    if(!blink){
+      const pulse = 1 + Math.sin(frame*0.2)*0.06;
+      ctx.save();
+      ctx.beginPath(); ctx.arc(s.x,s.y,(r+11)*pulse,0,TAU);
+      ctx.strokeStyle='rgba(57,240,200,0.85)'; ctx.lineWidth=3;
+      ctx.shadowColor='#39f0c8'; ctx.shadowBlur=16; ctx.stroke();
+      ctx.restore();
+    }
+  }
 
   // ---- name ----
   ctx.save();
