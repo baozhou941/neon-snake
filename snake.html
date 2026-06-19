@@ -660,9 +660,12 @@ const Sound = (function(){
   function boostOn(){
     if(!actx||boostOsc) return;
     boostOsc=actx.createOscillator(); boostG=actx.createGain();
-    boostOsc.type='sawtooth'; boostOsc.frequency.value=70;
-    boostG.gain.value=0.0001; boostG.connect(sfxGain); boostOsc.connect(boostG);
-    boostG.gain.exponentialRampToValueAtTime(0.07, actx.currentTime+0.06);
+    // 柔和低频(三角波)经低通滤波，去掉刺耳高次谐波、音量大幅降低
+    const lp=actx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=360;
+    boostOsc.type='triangle'; boostOsc.frequency.value=58;
+    boostG.gain.value=0.0001;
+    boostOsc.connect(lp); lp.connect(boostG); boostG.connect(sfxGain);
+    boostG.gain.exponentialRampToValueAtTime(0.026, actx.currentTime+0.10);
     boostOsc.start();
   }
   function boostOff(){
@@ -1231,8 +1234,8 @@ function tick(){
   if(player){
     camX=lerp(camX,player.x,0.12);
     camY=lerp(camY,player.y,0.12);
-    // zoom out as you grow（乘 BASE_ZOOM 扩大视野，手机更明显）
-    const targetScale=clamp(1.05 - (player.radius-7)*0.012, 0.6, 1.05) * BASE_ZOOM;
+    // zoom out as you grow（乘 BASE_ZOOM 扩大视野；放缓缩放避免变大后渲染过多实体）
+    const targetScale=clamp(1.05 - (player.radius-7)*0.009, 0.72, 1.05) * BASE_ZOOM;
     camScale=lerp(camScale,targetScale,0.04);
   }
 
@@ -1295,8 +1298,14 @@ function render(){
   drawGrid();
   drawArena();
   drawOrbs();
-  // snakes: draw others first, player on top
-  for(const s of snakes){ if(s!==player && !s.dead) drawSnake(s); }
+  // snakes: 跳过完全在视野外的(按头部距离+身体跨度估算)
+  const view=Math.max(VW,VH)/camScale*0.6 + 80;
+  for(const s of snakes){
+    if(s===player || s.dead) continue;
+    const reach = s.pts.length*spacingFor(s.len) + s.radius + 40;
+    if(Math.abs(s.x-camX) > view+reach || Math.abs(s.y-camY) > view+reach) continue;
+    drawSnake(s);
+  }
   if(player && !player.dead) drawSnake(player);
   drawParticles();
 
@@ -1394,8 +1403,10 @@ function drawSnake(s){
   const r=s.radius;
   const pts=s.pts;
   if(pts.length<2) return;
-  // LOD：远视角或超长时隔点描边,大幅降负载（无 shadowBlur）
-  const step = (camScale<0.85 || pts.length>120) ? 2 : 1;
+  // LOD：视角越远/蛇越长，隔点越多，大幅降负载（无 shadowBlur）
+  let step = 1;
+  if(camScale<0.55) step=3;
+  else if(camScale<0.82 || pts.length>110) step=2;
   const heat = s.isPlayer ? Math.min(combo/30,1) : 0;   // 连击过热
 
   ctx.save();
@@ -1405,7 +1416,7 @@ function drawSnake(s){
   ctx.strokeStyle=hexRGBA(s.color, s.isPlayer?0.20:0.13);
   ctx.lineWidth=r*2 + (s.isPlayer?14:9);
   strokePath(pts,step);
-  // 连击过热：额外暖色光晕
+  // 连击过热：额外暖色光晕(仅玩家)
   if(heat>0.02){
     ctx.strokeStyle=hexRGBA('#ffb24d', 0.22*heat);
     ctx.lineWidth=r*2 + 16 + heat*16;
@@ -1418,10 +1429,6 @@ function drawSnake(s){
   // 3) 暗芯（盖在亮底上,留出霓虹描边,避免糊成一块）
   ctx.strokeStyle=s.dark;
   ctx.lineWidth=Math.max(2, r*2-6);
-  strokePath(pts,step);
-  // 4) 细高光中线
-  ctx.strokeStyle=hexRGBA(s.color,0.8);
-  ctx.lineWidth=Math.max(1, r*0.5);
   strokePath(pts,step);
   ctx.restore();
 
