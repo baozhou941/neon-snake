@@ -33,6 +33,11 @@
   #stats .val{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;
     color:var(--neon);text-shadow:0 0 12px rgba(57,240,200,.6);}
   #stats .val.len{color:var(--pink);text-shadow:0 0 12px rgba(255,77,157,.6);}
+  #stats .val.title{color:#ffd24d;text-shadow:0 0 12px rgba(255,210,77,.55);font-size:17px;}
+  #buffHud{position:fixed;top:166px;left:14px;z-index:5;display:flex;flex-direction:column;gap:5px;pointer-events:none;}
+  #buffHud .buff{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;
+    background:rgba(10,14,30,.55);border:1px solid rgba(120,150,255,.2);border-radius:8px;
+    padding:3px 9px;backdrop-filter:blur(4px);font-variant-numeric:tabular-nums;}
 
   /* leaderboard top-right */
   #board{top:14px;right:14px;padding:12px 14px;width:208px;}
@@ -204,10 +209,12 @@
 <!-- HUD -->
 <div class="hud">
   <div id="stats" class="panel">
+    <div class="row"><span class="lab">称号</span><span class="val title" id="titleV">幼蛇</span></div>
     <div class="row"><span class="lab">分数</span><span class="val" id="scoreV">0</span></div>
     <div class="row"><span class="lab">长度</span><span class="val len" id="lenV">10</span></div>
     <div class="row"><span class="lab">排名</span><span class="val" id="rankV">#1</span></div>
   </div>
+  <div id="buffHud"></div>
   <div id="board" class="panel">
     <h3>⚡ 排行榜</h3>
     <ol id="boardList"></ol>
@@ -376,6 +383,8 @@ class Snake{
     this.mods = defaultMods();   // 光谱进化修正（仅玩家会改）
     this.mutLevel = 0;           // 已触发的里程碑数
     this.shield = 0;             // 护盾帧数（>0 时免疫死亡）
+    this.buffs = {x2:0,magnet:0,ghost:0,rush:0};  // 特殊道具限时增益
+    this.tier = 0;               // 成长段位
   }
   get radius(){ return radiusFor(this.len); }
   get head(){ return this.pts[0]; }
@@ -438,6 +447,19 @@ let arenaR=WORLD_R;
 let ev={phase:'idle', timer:1500, t:0, lastKind:'void'};
 // phase 2b: AI 导演侵略性 0..1
 let aggression=0.3;
+// phase 3: 特殊道具 / 跳字 / 段位
+let popups=[];
+let powerTimer=600;
+const POWERS={
+  x2:    {name:'双倍分', icon:'✖2', color:'#ffd24d', dur:480},
+  magnet:{name:'磁暴',   icon:'🧲', color:'#7c5cff', dur:480},
+  ghost: {name:'虚影',   icon:'👻', color:'#9fe8ff', dur:360},
+  rush:  {name:'疾冲',   icon:'⚡', color:'#39f0c8', dur:420},
+};
+const POWER_KEYS=['x2','magnet','ghost','rush'];
+const TIERS=[{l:0,n:'幼蛇'},{l:120,n:'游猎'},{l:300,n:'巨蛇'},{l:600,n:'霸主'},{l:1100,n:'传说'}];
+function tierFor(len){ let t=0; for(let i=0;i<TIERS.length;i++) if(len>=TIERS[i].l) t=i; return t; }
+function popup(x,y,text,color){ if(popups.length>48) return; popups.push({x,y,text,color:color||'#eaf',life:1}); }
 function defaultMods(){
   return {lenGain:1, magnet:1, turn:1, speed:1, boostSpeed:1, boostCost:1,
           fuelRegen:1, phase:false, thorns:0, comboBoost:1, comboWindow:1, hit:1,
@@ -474,6 +496,17 @@ function fillOrbs(){
     const p=randWorldPoint(40);
     spawnOrb(p.x,p.y,1);
   }
+}
+// 特殊能量道具
+function spawnPower(x,y,type){
+  type=type||POWER_KEYS[randInt(0,POWER_KEYS.length-1)];
+  orbs.push({x,y,r:13,val:6,color:POWERS[type].color,pulse:rand(0,TAU),vx:0,vy:0,delay:0,power:type});
+}
+function applyBuff(type){
+  player.buffs[type]=Math.max(player.buffs[type], POWERS[type].dur);
+  banner(POWERS[type].icon+' '+POWERS[type].name+'!', POWERS[type].color);
+  popup(player.x, player.y-player.radius-14, POWERS[type].name, POWERS[type].color);
+  Sound.levelup();
 }
 
 function pickPersona(){
@@ -577,6 +610,7 @@ function startEvent(kind){
   if(kind==='nova'){
     banner('☄ 超新星爆发 · 中心能量喷涌','#ffd24d');
     for(let i=0;i<90;i++){ const p=randDisc(380); spawnOrb(p.x,p.y, randInt(4,9)); }
+    for(let i=0;i<3;i++){ const p=randDisc(220); spawnPower(p.x,p.y); }  // 中心掉落特殊道具
     ev.phase='idle'; ev.timer=2400;
   } else {
     banner('⚠ 虚空收缩 · 退向中心！','#ff4d9d');
@@ -816,6 +850,7 @@ function startGame(){
   combo=0; comboTimer=0; bonusScore=0; shake=0; freeze=0;
   paused=false; arenaR=WORLD_R; aggression=0.3;
   ev={phase:'idle', timer:1500, t:0, lastKind:'void'};
+  popups=[]; powerTimer=600;
   acquired.clear();
   document.getElementById('evolve').classList.remove('show');
   const p=randWorldPoint(300);
@@ -1035,7 +1070,7 @@ function updateDirector(){
 function eatOrbs(s){
   const r=s.radius + 6;
   const r2=r*r;
-  const mag = s.mods.magnet;
+  const mag = s.mods.magnet * (s.buffs.magnet>0 ? 3 : 1);
   const magR = r + 90*mag;
   const magR2 = magR*magR;
   for(let i=orbs.length-1;i>=0;i--){
@@ -1044,13 +1079,20 @@ function eatOrbs(s){
     const dx=o.x-s.x, dy=o.y-s.y;
     const d2=dx*dx+dy*dy;
     if(d2 < r2){
-      s.len += o.val*0.6*s.mods.lenGain;
+      if(o.power){
+        s.len += 5*s.mods.lenGain;
+        if(s.isPlayer) applyBuff(o.power);
+      } else {
+        s.len += o.val*0.6*s.mods.lenGain;
+      }
       if(s.isPlayer){
         burst(o.x,o.y,o.color,o.val>=5?10:4,o.val>=5?3:1.8);
         Sound.eat();
         // ---- 吞噬连击 ----
         combo++; comboTimer=Math.round(70*s.mods.comboWindow);
-        bonusScore += Math.max(1, Math.round(o.val * Math.min(combo,40) * 0.45 * s.mods.comboBoost));
+        const gain=Math.max(1, Math.round(o.val * Math.min(combo,40) * 0.45 * s.mods.comboBoost * (s.buffs.x2>0?2:1)));
+        bonusScore += gain;
+        if(o.val>=4 || (combo>=5 && combo%10===0)) popup(o.x,o.y,'+'+gain, o.power?o.color:(s.buffs.x2>0?'#ffd24d':'#cfe8ff'));
       }
       orbs.splice(i,1);
     } else if(d2 < magR2){
@@ -1087,6 +1129,7 @@ function killSnake(s,by){
   burst(s.x,s.y,s.color,40,5);
   if(by && by.isPlayer){
     kills++; Sound.kill(); shake=Math.max(shake,8); freeze=5;
+    popup(s.x, s.y, '吞噬 '+s.name+'！', '#ff7da6');
     if(by.mods.thorns>0) by.len += 5*by.mods.thorns;   // 棘刺：击杀额外吞噬奖励
     if(by.mods.bloodlust){ by.boostFuel=1; by.len += 8; }  // 嗜血：击杀回满冲刺+额外成长
   }
@@ -1139,12 +1182,15 @@ function tick(){
     }
     player.setAngleToward(targetAng, TURN_RATE*player.mods.turn);
 
-    // boost (costs length + fuel) —— 按钮/空格/左键 或 摇杆推到底
-    const canBoost = (boostHeld||edgeBoost) && player.len>12 && player.boostFuel>0.04;
+    // boost —— 按钮/空格/左键/摇杆推到底；疾冲道具期间免费狂奔
+    const rush = player.buffs.rush>0;
+    const canBoost = rush || ((boostHeld||edgeBoost) && player.len>12 && player.boostFuel>0.04);
     player.boosting = canBoost;
     if(canBoost){
-      player.len -= 0.06*player.mods.boostCost;
-      player.boostFuel = clamp(player.boostFuel - 0.012*player.mods.boostCost, 0, 1);
+      if(!rush){   // 疾冲不消耗
+        player.len -= 0.06*player.mods.boostCost;
+        player.boostFuel = clamp(player.boostFuel - 0.012*player.mods.boostCost, 0, 1);
+      }
       // drop a small orb trail (节流以保流畅)
       if(frame%7===0){
         const tx=player.x-Math.cos(player.angle)*player.radius;
@@ -1176,8 +1222,8 @@ function tick(){
     const c=checkCrash(s);
     if(c){
       if(s===player && player.shield>0){ /* 护盾：免疫一切伤害 */ }
-      // 相位：玩家冲刺时蛇头可穿过他蛇身体而不死
-      else if(s===player && player.mods.phase && player.boosting && !c.wall){ /* 穿身而过 */ }
+      // 相位/虚影：玩家穿过他蛇身体而不死（相位需冲刺,虚影道具无条件）
+      else if(s===player && !c.wall && (player.buffs.ghost>0 || (player.mods.phase && player.boosting))){ /* 穿身而过 */ }
       // 涅槃：死亡时消耗一次复活
       else if(s===player && player.mods.revive>0){ revivePlayer(c.wall); }
       else if(c.wall){ killSnake(s,null); }
@@ -1212,6 +1258,17 @@ function tick(){
   if(shake>0) shake=Math.max(0, shake-0.6);
   // ----- shield countdown -----
   if(player && !player.dead && player.shield>0) player.shield--;
+  // ----- buffs countdown -----
+  if(player && !player.dead){
+    for(const k of POWER_KEYS) if(player.buffs[k]>0) player.buffs[k]--;
+    // 成长段位晋升
+    const nt=tierFor(player.len);
+    if(nt>player.tier){ player.tier=nt; banner('晋升 · '+TIERS[nt].n,'#ffd24d'); Sound.levelup(); }
+  }
+  // ----- 特殊道具刷新 -----
+  if(--powerTimer<=0){ powerTimer=randInt(540,840); const pp=randWorldPoint(140); spawnPower(pp.x,pp.y); }
+  // ----- 跳字 -----
+  for(let i=popups.length-1;i>=0;i--){ const p=popups[i]; p.y-=0.7; p.life-=0.018; if(p.life<=0) popups.splice(i,1); }
 
   // ----- dynamic events -----
   updateEvents();
@@ -1250,14 +1307,22 @@ const scoreV=document.getElementById('scoreV'),
       rankV=document.getElementById('rankV'),
       boardList=document.getElementById('boardList'),
       boostFill=document.getElementById('boostFill'),
-      comboHud=document.getElementById('comboHud');
+      comboHud=document.getElementById('comboHud'),
+      titleV=document.getElementById('titleV'),
+      buffHud=document.getElementById('buffHud');
 function playerScore(){ return Math.max(0, player.score) + bonusScore; }
 function comboMult(){ return 1 + Math.min(combo*0.1, 2); }   // 展示用倍率，最高约 x3
 function updateHUD(){
   if(!player) return;
   scoreV.textContent=playerScore();
   lenV.textContent=Math.floor(player.len);
+  titleV.textContent=TIERS[player.tier].n;
   boostFill.style.width=(player.boostFuel*100)+'%';
+  // 增益剩余时间
+  let bh='';
+  for(const k of POWER_KEYS) if(player.buffs[k]>0)
+    bh+=`<div class="buff" style="color:${POWERS[k].color}">${POWERS[k].icon} ${POWERS[k].name} ${Math.ceil(player.buffs[k]/60)}s</div>`;
+  buffHud.innerHTML=bh;
   // combo readout
   if(combo>=3){
     comboHud.classList.add('on');
@@ -1308,6 +1373,7 @@ function render(){
   }
   if(player && !player.dead) drawSnake(player);
   drawParticles();
+  drawPopups();
 
   ctx.restore();
 
@@ -1391,11 +1457,37 @@ function drawOrbs(){
     if(Math.abs(o.x-camX)>view||Math.abs(o.y-camY)>view) continue;
     o.pulse+=0.06;
     const pr=o.r*(1+Math.sin(o.pulse)*0.12);
+    if(o.power){
+      // 特殊道具：发光圆环 + 图标，醒目可辨
+      ctx.beginPath(); ctx.arc(o.x,o.y,pr*2.2,0,TAU);
+      ctx.fillStyle=hexRGBA(o.color,0.18); ctx.fill();
+      ctx.beginPath(); ctx.arc(o.x,o.y,pr*1.35,0,TAU);
+      ctx.strokeStyle=o.color; ctx.lineWidth=3; ctx.shadowColor=o.color; ctx.shadowBlur=18; ctx.stroke();
+      ctx.shadowBlur=0;
+      ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.font='bold '+(o.r*1.05)+'px "Segoe UI",sans-serif';
+      ctx.fillText(POWERS[o.power].icon, o.x, o.y+1);
+      continue;
+    }
     ctx.beginPath(); ctx.arc(o.x,o.y,pr*2.1,0,TAU);
     ctx.fillStyle=hexRGBA(o.color,0.14); ctx.fill();
     ctx.beginPath(); ctx.arc(o.x,o.y,pr,0,TAU);
     ctx.fillStyle=o.color; ctx.fill();
   }
+  ctx.restore();
+}
+
+function drawPopups(){
+  if(!popups.length) return;
+  ctx.save();
+  ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.shadowBlur=0;
+  ctx.font='bold '+(15/camScale)+'px "Segoe UI",sans-serif';
+  for(const p of popups){
+    ctx.globalAlpha=clamp(p.life,0,1);
+    ctx.fillStyle=p.color;
+    ctx.fillText(p.text, p.x, p.y);
+  }
+  ctx.globalAlpha=1;
   ctx.restore();
 }
 
