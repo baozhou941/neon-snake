@@ -909,8 +909,8 @@ function gameOver(){
 
 // turn a dead snake's body into orbs —— 向外迸射 + 短暂不可拾取，避免被瞬间吸收看不见
 function scatterSnake(s){
-  const n = clamp(Math.round(s.len*0.55), 6, 90);   // 球数随体型，但封顶
-  const val = clamp(3 + Math.floor(s.len/120), 4, 12);
+  const n = clamp(Math.round(s.len*0.45), 6, 55);    // 球数随体型,封顶更低(降光球洪峰)
+  const val = clamp(3 + Math.floor(s.len/160), 4, 8);
   for(let i=0;i<n;i++){
     const p = s.pts[Math.min(s.pts.length-1, Math.floor(i/n*s.pts.length))] || s.head;
     const a = rand(0,TAU), v = rand(1.6,4.2);
@@ -1253,7 +1253,8 @@ function tick(){
   }
   // ----- orbs upkeep -----
   if(orbs.length<ORB_TARGET && frame%3===0) fillOrbs();
-  if(orbs.length>ORB_TARGET*1.6){ orbs.splice(0, orbs.length-Math.floor(ORB_TARGET*1.4)); }
+  // 更紧的上限,削掉最旧的环境球(迸射奖励球在队尾,保留)
+  if(orbs.length>ORB_TARGET+170){ orbs.splice(0, orbs.length-(ORB_TARGET+110)); }
 
   // ----- combo decay -----
   if(comboTimer>0){ comboTimer--; if(comboTimer===0) combo=0; }
